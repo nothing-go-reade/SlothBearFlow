@@ -1,112 +1,162 @@
 # LangChain Single Agent
 
-这是一个基于 `FastAPI + LangChain + Ollama + Redis + Milvus` 的单 Agent 项目骨架，目标是让项目在本地第三方组件准备好的前提下可以直接运行，同时在组件缺失时尽量优雅降级。
+A single-agent project scaffold built with `FastAPI`, `LangChain`, `Ollama`, `Redis`, and `Milvus`.
 
-## 功能概览
+The goal of this repository is to provide a local-first agent service that can run out of the box when its third-party dependencies are available, while degrading gracefully when some components are missing.
+
+## Quick Start
+
+```bash
+cp .env.example .env
+./.venv/bin/pip install -r requirements.txt
+./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Then open:
+
+- API docs: `http://127.0.0.1:8000/docs`
+- Health check: `http://127.0.0.1:8000/health`
+
+## Features
 
 - `POST /chat`
-  统一对话入口，支持短期记忆、摘要记忆、工具调用，默认直接返回自然语言结果，可按开关启用结构化输出或 SSE 流式输出。
+  Unified chat entrypoint with short-term memory, summary memory, and tool calling. By default, it returns plain natural-language responses, with optional structured output and SSE streaming.
 - `POST /ingest`
-  将纯文本切分后写入 Milvus，供 `search_knowledge` 工具做 RAG 检索。
+  Splits plain text into chunks and stores them in Milvus so the `search_knowledge` tool can use them for RAG retrieval.
 - `GET /health`
-  返回 Redis、Milvus 和会话存储后端状态，便于快速排障。
+  Reports the status of Redis, Milvus, and the session storage backend for quick troubleshooting.
 
-## 内置工具
+## Built-in Tools
 
 - `get_current_time`
-  处理“现在几点”“今天几号”这类时间问题。
+  Handles time-related questions such as "What time is it now?" or "What's today's date?"
 - `get_weather`
-  离线天气样例工具，适合工具调用联调；接入真实 API 后可直接替换实现。
+  An offline weather demo tool that is useful for tool-calling integration tests. You can replace it directly with a real weather API implementation.
 - `get_session_context`
-  让 Agent 在追问场景下主动查看最近对话上下文。
+  Lets the agent actively inspect recent conversation context during follow-up turns.
 - `search_knowledge`
-  启用 RAG 且 Milvus 可用时自动注册，返回带编号和来源的检索片段。
+  Automatically registered when RAG is enabled and Milvus is available. Returns retrieved snippets with source references and chunk indices.
 
-## 环境准备
+## Requirements
 
-推荐 Python `3.10+`，当前项目也兼容 Python `3.9`。
+- Python `3.10+` recommended
+- Python `3.9` is also supported
 
-安装依赖：
+## Project Structure
+
+```text
+.
+|-- app/
+|   |-- agent/        # Agent executor and chat workflow
+|   |-- memory/       # Short-term and summary memory management
+|   |-- rag/          # Milvus integration, embeddings, ingest, splitter
+|   |-- tools/        # Built-in tools and tool registry
+|   |-- worker/       # Background task processing
+|   |-- config.py     # Environment-driven settings
+|   `-- main.py       # FastAPI application entrypoint
+|-- tests/            # Smoke tests and API behavior checks
+|-- local_run.py      # Local Ollama connectivity check
+|-- requirements.txt
+`-- docker-compose.yml
+```
+
+Install dependencies:
 
 ```bash
 ./.venv/bin/pip install -r requirements.txt
 ```
 
-准备环境变量：
+Prepare environment variables:
 
 ```bash
 cp .env.example .env
 ```
 
-## 启动方式
+## Running the Service
 
-启动 API 服务：
+Start the API server:
 
 ```bash
 ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-启动后可以先检查：
+After the server starts, you can verify the service with:
 
 ```bash
 curl http://127.0.0.1:8000/health
 ```
 
-如果只想验证 Ollama 模型是否能访问：
+If you only want to verify that the Ollama model is reachable:
 
 ```bash
 ./.venv/bin/python local_run.py
 ```
 
-## 常见开关
+## Configuration Flags
 
-- 关闭 RAG：设置 `USE_RAG=false`
-- 跳过 Milvus 初始化：设置 `SKIP_MILVUS=true`
-- 关闭二段式结构化整理：设置 `STRUCTURED_OUTPUT=false`
-- 开启二段式结构化整理：设置 `STRUCTURED_OUTPUT=true`
-- 开启流式输出：设置 `STREAM_OUTPUT=true`
-- 流式输出格式：设置 `STREAM_OUTPUT_FORMAT=plain` 或 `STREAM_OUTPUT_FORMAT=sse`
-- 关闭异步摘要压缩：设置 `ASYNC_SUMMARY_UPDATE=false`
+- Disable RAG: set `USE_RAG=false`
+- Skip Milvus initialization: set `SKIP_MILVUS=true`
+- Disable the second-pass structured formatter: set `STRUCTURED_OUTPUT=false`
+- Enable the second-pass structured formatter: set `STRUCTURED_OUTPUT=true`
+- Enable streaming output: set `STREAM_OUTPUT=true`
+- Choose streaming format: set `STREAM_OUTPUT_FORMAT=plain` or `STREAM_OUTPUT_FORMAT=sse`
+- Disable asynchronous summary compression: set `ASYNC_SUMMARY_UPDATE=false`
 
-## 请求示例
+## Example Requests
 
-聊天请求：
+Chat request:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
   -H 'Content-Type: application/json' \
-  -d '{"session_id":"demo-1","message":"帮我总结一下退款流程"}'
+  -d '{"session_id":"demo-1","message":"Please summarize the refund process for me."}'
 ```
 
-入库请求：
+Ingest request:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/ingest \
   -H 'Content-Type: application/json' \
-  -d '{"source":"refund-policy.md","text":"退款申请需要先提交工单，再经过财务审核。"}'
+  -d '{"source":"refund-policy.md","text":"Refund requests must be submitted through a support ticket before finance review."}'
 ```
 
-## 排障建议
+## Troubleshooting
 
-- `/health` 里 `session_store.backend=memory` 表示 Redis 不可用，但聊天仍会工作。
-- `milvus.enabled=false` 且 `reason` 为连接错误时，主对话链路仍可运行，只是不会注册 `search_knowledge`。
-- 默认 `structured_output=false`，接口直接返回模型最终文本，更适合多模型调试。
-- `stream_output=true` 时，只有基础聊天链路会走流式输出；工具链路会自动回退为普通阻塞输出。
-- `STREAM_OUTPUT_FORMAT=plain` 时会直接输出内容文本，适合 `curl`；`sse` 会返回 `start/chunk/done` 事件。
-- 如果 `structured_output=true` 且模型不支持稳定结构化输出，系统会自动回退为原始文本。
+- If `/health` shows `session_store.backend=memory`, Redis is unavailable, but chat will still work.
+- If `milvus.enabled=false` and the reported `reason` is a connection error, the main chat flow still works, but `search_knowledge` will not be registered.
+- By default, `structured_output=false`, which means the API returns the model's final plain-text response directly. This is usually better for multi-model debugging.
+- When `stream_output=true`, only the basic chat path uses streaming. Tool-invoking paths automatically fall back to standard blocking responses.
+- When `STREAM_OUTPUT_FORMAT=plain`, the response is returned as plain text, which is convenient for `curl`. The `sse` mode returns `start`, `chunk`, and `done` events.
+- If `structured_output=true` but the model does not support stable structured output, the system automatically falls back to raw text.
 
-## 测试
+## Testing
 
-运行测试：
+Run tests with:
 
 ```bash
 ./.venv/bin/python -m pytest -q
 ```
 
-当前测试覆盖：
+Current test coverage includes:
 
-- 基础健康检查
-- 内存会话存储降级
-- `/chat` 正常响应
-- `/ingest` 在不同开关组合下的行为
-- RAG 引用在 API 响应中的透传
+- Basic health checks
+- In-memory session store fallback
+- Successful `/chat` responses
+- `/ingest` behavior under different feature-flag combinations
+- Pass-through of RAG references in API responses
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+Before submitting changes, it is a good idea to:
+
+- Keep feature changes focused and easy to review
+- Update the README or examples when behavior changes
+- Run the test suite locally with `./.venv/bin/python -m pytest -q`
+
+## License
+
+No license file has been added yet.
+
+If you plan to open source this repository on GitHub, add a `LICENSE` file before publishing so others know how they are allowed to use, modify, and redistribute the project.
