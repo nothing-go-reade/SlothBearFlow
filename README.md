@@ -1,4 +1,4 @@
-# LangChain Single Agent Demo
+# LangChain Single Agent
 
 这是一个基于 `FastAPI + LangChain + Ollama + Redis + Milvus` 的单 Agent 项目骨架，目标是让项目在本地第三方组件准备好的前提下可以直接运行，同时在组件缺失时尽量优雅降级。
 
