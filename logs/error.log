@@ -1,0 +1,80 @@
+2026-04-27 10:50:32,623 | INFO | uvicorn.error | Started server process [14864]
+2026-04-27 10:50:32,623 | INFO | uvicorn.error | Started server process [14864]
+2026-04-27 10:50:32,623 | INFO | uvicorn.error | Waiting for application startup.
+2026-04-27 10:50:32,623 | INFO | uvicorn.error | Waiting for application startup.
+2026-04-27 10:50:32,624 | INFO | uvicorn.error | Application startup complete.
+2026-04-27 10:50:32,624 | INFO | uvicorn.error | Application startup complete.
+2026-04-27 10:50:32,625 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-04-27 10:50:32,625 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-04-27 10:52:59,945 | INFO | uvicorn.error | Shutting down
+2026-04-27 10:52:59,945 | INFO | uvicorn.error | Shutting down
+2026-04-27 10:53:00,050 | INFO | uvicorn.error | Waiting for application shutdown.
+2026-04-27 10:53:00,050 | INFO | uvicorn.error | Waiting for application shutdown.
+2026-04-27 10:53:00,056 | INFO | uvicorn.error | Application shutdown complete.
+2026-04-27 10:53:00,056 | INFO | uvicorn.error | Application shutdown complete.
+2026-04-27 10:53:00,056 | INFO | uvicorn.error | Finished server process [14864]
+2026-04-27 10:53:00,056 | INFO | uvicorn.error | Finished server process [14864]
+2026-04-27 10:57:28,673 | INFO | uvicorn.error | Started server process [18215]
+2026-04-27 10:57:28,673 | INFO | uvicorn.error | Started server process [18215]
+2026-04-27 10:57:28,674 | INFO | uvicorn.error | Waiting for application startup.
+2026-04-27 10:57:28,674 | INFO | uvicorn.error | Waiting for application startup.
+2026-04-27 10:57:28,674 | INFO | uvicorn.error | Application startup complete.
+2026-04-27 10:57:28,674 | INFO | uvicorn.error | Application startup complete.
+2026-04-27 10:57:28,676 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-04-27 10:57:28,676 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-04-27 11:00:07,209 | INFO | uvicorn.error | Shutting down
+2026-04-27 11:00:07,209 | INFO | uvicorn.error | Shutting down
+2026-04-27 11:00:07,311 | INFO | uvicorn.error | Waiting for application shutdown.
+2026-04-27 11:00:07,311 | INFO | uvicorn.error | Waiting for application shutdown.
+2026-04-27 11:00:07,313 | INFO | uvicorn.error | Application shutdown complete.
+2026-04-27 11:00:07,313 | INFO | uvicorn.error | Application shutdown complete.
+2026-04-27 11:00:07,313 | INFO | uvicorn.error | Finished server process [18215]
+2026-04-27 11:00:07,313 | INFO | uvicorn.error | Finished server process [18215]
+2026-04-27 11:06:19,508 | INFO | uvicorn.error | Started server process [22425]
+2026-04-27 11:06:19,508 | INFO | uvicorn.error | Started server process [22425]
+2026-04-27 11:06:19,508 | INFO | uvicorn.error | Waiting for application startup.
+2026-04-27 11:06:19,508 | INFO | uvicorn.error | Waiting for application startup.
+2026-04-27 11:06:19,509 | INFO | uvicorn.error | Application startup complete.
+2026-04-27 11:06:19,509 | INFO | uvicorn.error | Application startup complete.
+2026-04-27 11:06:19,510 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-04-27 11:06:19,510 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-04-27 11:07:34,384 | INFO | uvicorn.error | Shutting down
+2026-04-27 11:07:34,384 | INFO | uvicorn.error | Shutting down
+2026-04-27 11:07:34,492 | INFO | uvicorn.error | Waiting for application shutdown.
+2026-04-27 11:07:34,492 | INFO | uvicorn.error | Waiting for application shutdown.
+2026-04-27 11:07:34,496 | INFO | uvicorn.error | Application shutdown complete.
+2026-04-27 11:07:34,496 | INFO | uvicorn.error | Application shutdown complete.
+2026-04-27 11:07:34,496 | INFO | uvicorn.error | Finished server process [22425]
+2026-04-27 11:07:34,496 | INFO | uvicorn.error | Finished server process [22425]
+2026-04-27 11:25:02,041 | INFO | uvicorn.error | Started server process [32065]
+2026-04-27 11:25:02,041 | INFO | uvicorn.error | Started server process [32065]
+2026-04-27 11:25:02,041 | INFO | uvicorn.error | Waiting for application startup.
+2026-04-27 11:25:02,041 | INFO | uvicorn.error | Waiting for application startup.
+2026-04-27 11:25:02,042 | INFO | uvicorn.error | Application startup complete.
+2026-04-27 11:25:02,042 | INFO | uvicorn.error | Application startup complete.
+2026-04-27 11:25:02,044 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-04-27 11:25:02,044 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-04-27 11:29:44,869 | INFO | uvicorn.error | Shutting down
+2026-04-27 11:29:44,869 | INFO | uvicorn.error | Shutting down
+2026-04-27 11:29:44,974 | INFO | uvicorn.error | Waiting for application shutdown.
+2026-04-27 11:29:44,974 | INFO | uvicorn.error | Waiting for application shutdown.
+2026-04-27 11:29:44,977 | INFO | uvicorn.error | Application shutdown complete.
+2026-04-27 11:29:44,977 | INFO | uvicorn.error | Application shutdown complete.
+2026-04-27 11:29:44,978 | INFO | uvicorn.error | Finished server process [32065]
+2026-04-27 11:29:44,978 | INFO | uvicorn.error | Finished server process [32065]
+2026-04-27 11:29:49,467 | INFO | uvicorn.error | Started server process [34334]
+2026-04-27 11:29:49,467 | INFO | uvicorn.error | Started server process [34334]
+2026-04-27 11:29:49,467 | INFO | uvicorn.error | Waiting for application startup.
+2026-04-27 11:29:49,467 | INFO | uvicorn.error | Waiting for application startup.
+2026-04-27 11:29:49,467 | INFO | uvicorn.error | Application startup complete.
+2026-04-27 11:29:49,467 | INFO | uvicorn.error | Application startup complete.
+2026-04-27 11:29:49,468 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-04-27 11:29:49,468 | INFO | uvicorn.error | Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-04-27 11:30:35,371 | INFO | uvicorn.error | Shutting down
+2026-04-27 11:30:35,371 | INFO | uvicorn.error | Shutting down
+2026-04-27 11:30:35,478 | INFO | uvicorn.error | Waiting for application shutdown.
+2026-04-27 11:30:35,478 | INFO | uvicorn.error | Waiting for application shutdown.
+2026-04-27 11:30:35,479 | INFO | uvicorn.error | Application shutdown complete.
+2026-04-27 11:30:35,479 | INFO | uvicorn.error | Application shutdown complete.
+2026-04-27 11:30:35,479 | INFO | uvicorn.error | Finished server process [34334]
+2026-04-27 11:30:35,479 | INFO | uvicorn.error | Finished server process [34334]
