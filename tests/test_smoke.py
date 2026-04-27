@@ -68,6 +68,7 @@ def test_config_defaults_to_plain_text_output() -> None:
     s = Settings(_env_file=None)
     assert s.stream_output is False
     assert s.structured_output is False
+    assert s.enable_postgres_persistence is False
 
 
 def test_chat_streams_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,6 +147,38 @@ def test_chat_works_with_in_memory_session_store(monkeypatch: pytest.MonkeyPatch
     assert body["session_id"] == "s1"
 
 
+def test_chat_persists_metadata_when_postgres_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENABLE_POSTGRES_PERSISTENCE", "true")
+    monkeypatch.setenv("POSTGRES_DSN", "postgresql://demo")
+    from app.main import app
+
+    persisted: list[dict] = []
+
+    class FakeExecutor:
+        def invoke(self, payload):
+            return {"output": "这是一个测试回答"}
+
+    monkeypatch.setattr("app.main.build_agent_executor", lambda **kwargs: FakeExecutor())
+    monkeypatch.setattr("app.main.get_vector_store", lambda settings=None: None)
+    monkeypatch.setattr(
+        "app.main.postgres_persistence.ensure_schema",
+        lambda settings=None: True,
+    )
+    monkeypatch.setattr(
+        "app.main.postgres_persistence.persist_chat_turn",
+        lambda **kwargs: persisted.append(kwargs),
+    )
+
+    with TestClient(app) as client:
+        r = client.post("/chat", json={"session_id": "s-pg", "message": "你好"})
+
+    assert r.status_code == 200
+    assert len(persisted) == 1
+    assert persisted[0]["session_id"] == "s-pg"
+    assert persisted[0]["user_message"] == "你好"
+    assert persisted[0]["assistant_message"] == "这是一个测试回答"
+
+
 def test_ingest_blocked_when_rag_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SKIP_MILVUS", "true")
     monkeypatch.setenv("USE_RAG", "false")
@@ -180,6 +213,42 @@ def test_ingest_accepts_job_when_rag_enabled(monkeypatch: pytest.MonkeyPatch) ->
     body = r.json()
     assert body["accepted"] is True
     assert body["job_id"]
+
+
+def test_ingest_persists_job_metadata_when_postgres_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SKIP_MILVUS", "false")
+    monkeypatch.setenv("USE_RAG", "true")
+    monkeypatch.setenv("ENABLE_POSTGRES_PERSISTENCE", "true")
+    monkeypatch.setenv("POSTGRES_DSN", "postgresql://demo")
+    from app.config import get_settings
+    from app.main import app
+
+    persisted: list[dict] = []
+
+    async def fake_worker_loop(queue, settings=None):
+        while True:
+            await queue.get()
+            queue.task_done()
+
+    monkeypatch.setattr("app.main.worker_loop", fake_worker_loop)
+    monkeypatch.setattr(
+        "app.main.postgres_persistence.ensure_schema",
+        lambda settings=None: True,
+    )
+    monkeypatch.setattr(
+        "app.main.postgres_persistence.persist_ingest_job",
+        lambda **kwargs: persisted.append(kwargs),
+    )
+    get_settings.cache_clear()
+
+    with TestClient(app) as client:
+        r = client.post("/ingest", json={"source": "a.txt", "text": "hello"})
+
+    assert r.status_code == 200
+    assert len(persisted) == 1
+    assert persisted[0]["source"] == "a.txt"
+    assert persisted[0]["text_length"] == 5
+    assert persisted[0]["status"] == "queued"
 
 
 def test_chat_returns_rag_citations(monkeypatch: pytest.MonkeyPatch) -> None:

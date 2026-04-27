@@ -101,6 +101,8 @@ If you only want to verify that the Ollama model is reachable:
 - Enable streaming output: set `STREAM_OUTPUT=true`
 - Choose streaming format: set `STREAM_OUTPUT_FORMAT=plain` or `STREAM_OUTPUT_FORMAT=sse`
 - Disable asynchronous summary compression: set `ASYNC_SUMMARY_UPDATE=false`
+- Enable PostgreSQL metadata persistence: set `ENABLE_POSTGRES_PERSISTENCE=true`
+- Configure PostgreSQL DSN: set `POSTGRES_DSN=postgresql://...`
 
 ## Example Requests
 
@@ -124,6 +126,7 @@ curl -X POST http://127.0.0.1:8000/ingest \
 
 - If `/health` shows `session_store.backend=memory`, Redis is unavailable, but chat will still work.
 - If `milvus.enabled=false` and the reported `reason` is a connection error, the main chat flow still works, but `search_knowledge` will not be registered.
+- When `ENABLE_POSTGRES_PERSISTENCE=true`, the service will also persist chat sessions, chat turns, summaries, and ingest job metadata to PostgreSQL.
 - By default, `structured_output=false`, which means the API returns the model's final plain-text response directly. This is usually better for multi-model debugging.
 - When `stream_output=true`, only the basic chat path uses streaming. Tool-invoking paths automatically fall back to standard blocking responses.
 - When `STREAM_OUTPUT_FORMAT=plain`, the response is returned as plain text, which is convenient for `curl`. The `sse` mode returns `start`, `chunk`, and `done` events.

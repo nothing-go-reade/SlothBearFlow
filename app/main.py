@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from uvicorn.logging import AccessFormatter
@@ -26,6 +26,7 @@ from app.memory.short_memory import trim_message_window
 from app.memory.summary_memory import enqueue_summary_update
 from app.output_parser import structured_chat_output_from_text
 from app.output_schema import ChatOutput, Citation
+from app.persistence.postgres import postgres_persistence
 from app.rag.milvus_store import get_vector_store, get_vector_store_status
 from app.tools.rag_tool import get_last_rag_citations, get_last_rag_sources, reset_rag_sources
 from app.worker.background import worker_loop
@@ -118,6 +119,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    postgres_persistence.ensure_schema(settings)
     queue: asyncio.Queue = asyncio.Queue(maxsize=settings.job_queue_max)
     app.state.job_queue = queue
     app.state.worker_task = asyncio.create_task(worker_loop(queue, settings))
@@ -199,6 +201,11 @@ def root() -> Dict[str, Any]:
     }
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    return Response(status_code=204)
+
+
 @app.get("/health")
 def health() -> Dict[str, Any]:
     started_at = time.perf_counter()
@@ -243,6 +250,7 @@ def health() -> Dict[str, Any]:
             "loaded_messages": len(payload.get("messages") or []),
         },
         "milvus": vs_status,
+        "postgres_persistence": postgres_persistence.get_status(settings),
         "ollama_base_url": settings.ollama_base_url,
     }
     logger.info("health done in %.3fs", time.perf_counter() - started_at)
@@ -265,6 +273,13 @@ async def ingest(req: IngestRequest, request: Request) -> IngestResponse:
         )
     except asyncio.QueueFull:
         raise HTTPException(status_code=503, detail="任务队列已满，请稍后重试。")
+    postgres_persistence.persist_ingest_job(
+        job_id=job_id,
+        source=req.source,
+        text_length=len(req.text),
+        status="queued",
+        settings=settings,
+    )
     return IngestResponse(accepted=True, job_id=job_id)
 
 
@@ -379,6 +394,16 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
                 req.message,
                 answer,
             )
+            postgres_persistence.persist_chat_turn(
+                session_id=req.session_id,
+                user_message=req.message,
+                assistant_message=answer,
+                raw_output=answer,
+                response_source="agent",
+                tools_used=[],
+                citations=[],
+                settings=settings,
+            )
             if settings.async_summary_update:
                 queue: asyncio.Queue = request.app.state.job_queue
                 await enqueue_summary_update(queue, req.session_id)
@@ -478,6 +503,16 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         payload,
         req.message,
         structured.answer,
+    )
+    postgres_persistence.persist_chat_turn(
+        session_id=req.session_id,
+        user_message=req.message,
+        assistant_message=structured.answer,
+        raw_output=raw,
+        response_source=structured.source or rag_hint or "agent",
+        tools_used=structured.tools_used,
+        citations=[item.model_dump() for item in structured.citations],
+        settings=settings,
     )
     logger.info("chat session save done in %.3fs", time.perf_counter() - save_started_at)
 

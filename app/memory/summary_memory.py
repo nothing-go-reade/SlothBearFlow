@@ -13,6 +13,7 @@ from app.memory.redis_memory import (
     messages_from_payload,
     update_summary,
 )
+from app.persistence.postgres import postgres_persistence
 
 logger = logging.getLogger(__name__)
 
@@ -40,4 +41,5 @@ def run_summary_job(session_id: str, settings: Optional[Settings] = None) -> Non
     )
     text = summary.content if hasattr(summary, "content") else str(summary)
     update_summary(client, session_id, payload, str(text).strip())
+    postgres_persistence.persist_summary(session_id, str(text).strip(), settings=settings)
     logger.info("会话摘要已更新: session_id=%s", session_id)

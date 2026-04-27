@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     async_summary_update: bool = Field(
         default=True, validation_alias="ASYNC_SUMMARY_UPDATE"
     )
+
+    enable_postgres_persistence: bool = Field(
+        default=False, validation_alias="ENABLE_POSTGRES_PERSISTENCE"
+    )
+    postgres_dsn: str = Field(default="", validation_alias="POSTGRES_DSN")
+    postgres_connect_timeout: float = Field(
+        default=3.0, validation_alias="POSTGRES_CONNECT_TIMEOUT"
+    )
+
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     log_dir: str = Field(default="logs", validation_alias="LOG_DIR")
     app_log_file: str = Field(default="app.log", validation_alias="APP_LOG_FILE")
