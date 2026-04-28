@@ -78,14 +78,46 @@ class PostgresPersistence:
                             response_source TEXT NOT NULL DEFAULT '',
                             tools_used JSONB NOT NULL DEFAULT '[]'::jsonb,
                             citations JSONB NOT NULL DEFAULT '[]'::jsonb,
+                            response_mode TEXT NOT NULL DEFAULT 'invoke',
+                            stream_format TEXT NOT NULL DEFAULT '',
                             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                         )
                         """
                     )
                     cur.execute(
                         """
+                        ALTER TABLE agent_chat_turns
+                        ADD COLUMN IF NOT EXISTS response_mode TEXT NOT NULL DEFAULT 'invoke'
+                        """
+                    )
+                    cur.execute(
+                        """
+                        ALTER TABLE agent_chat_turns
+                        ADD COLUMN IF NOT EXISTS stream_format TEXT NOT NULL DEFAULT ''
+                        """
+                    )
+                    cur.execute(
+                        """
                         CREATE INDEX IF NOT EXISTS idx_agent_chat_turns_session_created
                         ON agent_chat_turns (session_id, created_at DESC)
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS agent_chat_stream_events (
+                            id BIGSERIAL PRIMARY KEY,
+                            session_id TEXT NOT NULL,
+                            seq INTEGER NOT NULL,
+                            event_type TEXT NOT NULL,
+                            content TEXT NOT NULL DEFAULT '',
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE INDEX IF NOT EXISTS idx_agent_stream_events_session_created
+                        ON agent_chat_stream_events (session_id, created_at DESC)
                         """
                     )
                     cur.execute(
@@ -135,6 +167,8 @@ class PostgresPersistence:
         response_source: str,
         tools_used: Iterable[str],
         citations: Iterable[dict[str, Any]],
+        response_mode: str = "invoke",
+        stream_format: str = "",
         settings: Optional[Settings] = None,
     ) -> None:
         settings = settings or get_settings()
@@ -171,9 +205,11 @@ class PostgresPersistence:
                             raw_output,
                             response_source,
                             tools_used,
-                            citations
+                            citations,
+                            response_mode,
+                            stream_format
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
                         """,
                         (
                             session_id,
@@ -183,10 +219,105 @@ class PostgresPersistence:
                             response_source,
                             tools_json,
                             citations_json,
+                            response_mode,
+                            stream_format,
                         ),
                     )
         except Exception:
             logger.exception("PostgreSQL 持久化 chat turn 失败: session_id=%s", session_id)
+
+    def persist_stream_events(
+        self,
+        *,
+        session_id: str,
+        events: Iterable[dict[str, Any]],
+        settings: Optional[Settings] = None,
+    ) -> None:
+        settings = settings or get_settings()
+        if not self.ensure_schema(settings):
+            return
+        rows = list(events)
+        if not rows:
+            return
+        try:
+            with self._get_connection(settings) as conn:
+                if conn is None:
+                    return
+                with conn.cursor() as cur:
+                    for idx, event in enumerate(rows):
+                        cur.execute(
+                            """
+                            INSERT INTO agent_chat_stream_events (
+                                session_id,
+                                seq,
+                                event_type,
+                                content
+                            )
+                            VALUES (%s, %s, %s, %s)
+                            """,
+                            (
+                                session_id,
+                                int(event.get("seq", idx)),
+                                str(event.get("event_type") or "chunk"),
+                                str(event.get("content") or ""),
+                            ),
+                        )
+        except Exception:
+            logger.exception(
+                "PostgreSQL 持久化 stream events 失败: session_id=%s", session_id
+            )
+
+    def load_session_snapshot(
+        self,
+        *,
+        session_id: str,
+        turn_limit: int,
+        settings: Optional[Settings] = None,
+    ) -> dict[str, Any]:
+        settings = settings or get_settings()
+        if not self.ensure_schema(settings):
+            return {"messages": [], "summary": ""}
+        if turn_limit <= 0:
+            return {"messages": [], "summary": ""}
+        try:
+            with self._get_connection(settings) as conn:
+                if conn is None:
+                    return {"messages": [], "summary": ""}
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT summary
+                        FROM agent_sessions
+                        WHERE session_id = %s
+                        """,
+                        (session_id,),
+                    )
+                    row = cur.fetchone()
+                    summary = str(row[0]) if row and row[0] is not None else ""
+
+                    cur.execute(
+                        """
+                        SELECT user_message, assistant_message
+                        FROM agent_chat_turns
+                        WHERE session_id = %s
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT %s
+                        """,
+                        (session_id, turn_limit),
+                    )
+                    rows = cur.fetchall() or []
+
+            rows = list(reversed(rows))
+            messages: list[dict[str, str]] = []
+            for user_message, assistant_message in rows:
+                messages.append({"role": "user", "content": str(user_message or "")})
+                messages.append(
+                    {"role": "assistant", "content": str(assistant_message or "")}
+                )
+            return {"messages": messages, "summary": summary}
+        except Exception:
+            logger.exception("PostgreSQL 读取 session 快照失败: session_id=%s", session_id)
+            return {"messages": [], "summary": ""}
 
     def persist_summary(
         self,

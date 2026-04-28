@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from app import Settings, get_settings
 from app.deps import get_redis
+from app.persistence.postgres import postgres_persistence
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,28 @@ def get_redis_session(
     settings = settings or get_settings()
     client = get_redis(settings)
     payload = load_session_payload(client, session_id)
+    if payload.get("messages"):
+        return payload, client
+    if not settings.postgres_restore_on_redis_miss:
+        return payload, client
+    snapshot = postgres_persistence.load_session_snapshot(
+        session_id=session_id,
+        turn_limit=max(1, int(settings.postgres_restore_turn_limit)),
+        settings=settings,
+    )
+    restored_messages = list(snapshot.get("messages") or [])
+    if not restored_messages and not str(snapshot.get("summary") or ""):
+        return payload, client
+    payload = {
+        "messages": restored_messages,
+        "summary": str(snapshot.get("summary") or ""),
+    }
+    save_session_payload(client, session_id, payload, ttl_sec=86400 * 7)
+    logger.info(
+        "会话已从 PostgreSQL 恢复: session_id=%s turns=%s",
+        session_id,
+        len(restored_messages) // 2,
+    )
     return payload, client
 
 

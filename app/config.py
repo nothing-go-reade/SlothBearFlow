@@ -131,6 +131,14 @@ class Settings(BaseSettings):
     postgres_connect_timeout: float = Field(
         default=3.0, validation_alias="POSTGRES_CONNECT_TIMEOUT"
     )
+    postgres_restore_on_redis_miss: bool = Field(
+        default=False,
+        validation_alias="POSTGRES_RESTORE_ON_REDIS_MISS",
+    )
+    postgres_restore_turn_limit: int = Field(
+        default=20,
+        validation_alias="POSTGRES_RESTORE_TURN_LIMIT",
+    )
 
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     log_dir: str = Field(default="logs", validation_alias="LOG_DIR")

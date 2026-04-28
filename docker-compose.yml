@@ -1,6 +1,6 @@
-# 开发用：Redis + Milvus Standalone（etcd + minio + milvus）
+# 开发用：Redis + Milvus Standalone（etcd + minio + milvus）+ PostgreSQL
 # 启动：docker compose up -d
-# Milvus 默认端口 19530；Redis 6379
+# Milvus 默认端口 19530；Redis 6379；PostgreSQL 5432
 
 services:
   redis:
@@ -8,6 +8,22 @@ services:
     ports:
       - "6379:6379"
     command: ["redis-server", "--appendonly", "yes"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: slothbearflow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d slothbearflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   etcd:
     image: quay.io/coreos/etcd:v3.5.5
@@ -51,6 +67,7 @@ services:
       - minio
 
 volumes:
+  postgres_data: {}
   etcd_data: {}
   minio_data: {}
   milvus_data: {}

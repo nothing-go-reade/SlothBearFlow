@@ -346,6 +346,7 @@ def test_chat_persists_metadata_when_postgres_enabled(monkeypatch: pytest.Monkey
     assert persisted[0]["session_id"] == "s-pg"
     assert persisted[0]["user_message"] == "你好"
     assert persisted[0]["assistant_message"] == "这是一个测试回答"
+    assert persisted[0]["response_mode"] == "invoke"
 
 
 def test_ingest_blocked_when_rag_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -418,6 +419,91 @@ def test_ingest_persists_job_metadata_when_postgres_enabled(monkeypatch: pytest.
     assert persisted[0]["source"] == "a.txt"
     assert persisted[0]["text_length"] == 5
     assert persisted[0]["status"] == "queued"
+
+
+def test_chat_stream_persists_stream_metadata_when_postgres_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STREAM_OUTPUT", "true")
+    monkeypatch.setenv("STRUCTURED_OUTPUT", "false")
+    monkeypatch.setenv("STREAM_OUTPUT_FORMAT", "sse")
+    monkeypatch.setenv("ENABLE_POSTGRES_PERSISTENCE", "true")
+    monkeypatch.setenv("POSTGRES_DSN", "postgresql://demo")
+    from app.config import get_settings
+    from app.main import app
+
+    persisted_turns: list[dict] = []
+    persisted_events: list[dict] = []
+
+    class FakeStreamExecutor:
+        def stream(self, payload):
+            yield {"output": "你好，"}
+            yield {"output": "这是流式返回。"}
+
+    monkeypatch.setattr("app.main.build_agent_executor", lambda **kwargs: FakeStreamExecutor())
+    monkeypatch.setattr("app.main.get_vector_store", lambda settings=None: None)
+    monkeypatch.setattr("app.main.postgres_persistence.ensure_schema", lambda settings=None: True)
+    monkeypatch.setattr(
+        "app.main.postgres_persistence.persist_chat_turn",
+        lambda **kwargs: persisted_turns.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "app.main.postgres_persistence.persist_stream_events",
+        lambda **kwargs: persisted_events.append(kwargs),
+    )
+    get_settings.cache_clear()
+
+    with TestClient(app) as client:
+        with client.stream("POST", "/chat", json={"session_id": "s-stream-pg", "message": "你好"}) as r:
+            body = "".join(chunk for chunk in r.iter_text())
+
+    assert r.status_code == 200
+    assert '"type": "chunk"' in body
+    assert len(persisted_turns) == 1
+    assert persisted_turns[0]["response_mode"] == "stream"
+    assert persisted_turns[0]["stream_format"] == "sse"
+    assert len(persisted_events) == 1
+    assert persisted_events[0]["session_id"] == "s-stream-pg"
+    assert len(persisted_events[0]["events"]) >= 3
+
+
+def test_restore_from_postgres_on_redis_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("POSTGRES_RESTORE_ON_REDIS_MISS", "true")
+    monkeypatch.setenv("POSTGRES_RESTORE_TURN_LIMIT", "3")
+    from app.config import get_settings
+    from app.deps import InMemoryRedis
+    from app.memory.redis_memory import get_redis_session
+
+    cache = InMemoryRedis()
+    monkeypatch.setattr("app.memory.redis_memory.get_redis", lambda settings=None: cache)
+    monkeypatch.setattr(
+        "app.memory.redis_memory.postgres_persistence.load_session_snapshot",
+        lambda **kwargs: {
+            "messages": [
+                {"role": "user", "content": "u1"},
+                {"role": "assistant", "content": "a1"},
+            ],
+            "summary": "s1",
+        },
+    )
+    get_settings.cache_clear()
+
+    payload, _client = get_redis_session("restore-1", settings=get_settings())
+    assert payload["summary"] == "s1"
+    assert len(payload["messages"]) == 2
+
+
+def test_no_restore_when_switch_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("POSTGRES_RESTORE_ON_REDIS_MISS", "false")
+    from app.config import get_settings
+    from app.deps import InMemoryRedis
+    from app.memory.redis_memory import get_redis_session
+
+    cache = InMemoryRedis()
+    monkeypatch.setattr("app.memory.redis_memory.get_redis", lambda settings=None: cache)
+    get_settings.cache_clear()
+
+    payload, _client = get_redis_session("restore-off", settings=get_settings())
+    assert payload["summary"] == ""
+    assert payload["messages"] == []
 
 
 def test_chat_returns_rag_citations(monkeypatch: pytest.MonkeyPatch) -> None:

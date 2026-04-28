@@ -370,11 +370,20 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
             stream_started_at = time.perf_counter()
             payload_input = {"input": req.message, "chat_history": windowed}
             full_output_parts: list[str] = []
+            persisted_stream_events: list[dict[str, Any]] = []
             if stream_format == "sse":
+                start_event = {"type": "start", "session_id": req.session_id}
+                persisted_stream_events.append(
+                    {
+                        "seq": 0,
+                        "event_type": "start",
+                        "content": json.dumps(start_event, ensure_ascii=False),
+                    }
+                )
                 yield (
                     "data: "
                     + json.dumps(
-                        {"type": "start", "session_id": req.session_id},
+                        start_event,
                         ensure_ascii=False,
                     )
                     + "\n\n"
@@ -389,6 +398,13 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
                     continue
                 full_output_parts.append(text)
                 if stream_format == "sse":
+                    persisted_stream_events.append(
+                        {
+                            "seq": len(persisted_stream_events),
+                            "event_type": "chunk",
+                            "content": text,
+                        }
+                    )
                     yield (
                         "data: "
                         + json.dumps(
@@ -397,9 +413,17 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
                         + "\n\n"
                     )
                 else:
+                    persisted_stream_events.append(
+                        {
+                            "seq": len(persisted_stream_events),
+                            "event_type": "chunk",
+                            "content": text,
+                        }
+                    )
                     yield text
 
             answer = "".join(full_output_parts)
+            stream_tools_used = _detect_used_tools(answer, False)
             append_turn_and_save(
                 client,
                 req.session_id,
@@ -413,8 +437,31 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
                 assistant_message=answer,
                 raw_output=answer,
                 response_source="agent",
-                tools_used=[],
+                tools_used=stream_tools_used,
                 citations=[],
+                response_mode="stream",
+                stream_format=stream_format,
+                settings=settings,
+            )
+            if stream_format == "sse":
+                done_payload = {
+                    "type": "done",
+                    "session_id": req.session_id,
+                    "answer": answer,
+                    "source": "agent",
+                    "citations": [],
+                    "tools_used": stream_tools_used,
+                }
+                persisted_stream_events.append(
+                    {
+                        "seq": len(persisted_stream_events),
+                        "event_type": "done",
+                        "content": json.dumps(done_payload, ensure_ascii=False),
+                    }
+                )
+            postgres_persistence.persist_stream_events(
+                session_id=req.session_id,
+                events=persisted_stream_events,
                 settings=settings,
             )
             if settings.async_summary_update:
@@ -428,17 +475,7 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
             if stream_format == "sse":
                 yield (
                     "data: "
-                    + json.dumps(
-                        {
-                            "type": "done",
-                            "session_id": req.session_id,
-                            "answer": answer,
-                            "source": "agent",
-                            "citations": [],
-                            "tools_used": [],
-                        },
-                        ensure_ascii=False,
-                    )
+                    + json.dumps(done_payload, ensure_ascii=False)
                     + "\n\n"
                 )
 
@@ -525,6 +562,8 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         response_source=structured.source or rag_hint or "agent",
         tools_used=structured.tools_used,
         citations=[item.model_dump() for item in structured.citations],
+        response_mode="invoke",
+        stream_format="",
         settings=settings,
     )
     logger.info("chat session save done in %.3fs", time.perf_counter() - save_started_at)
