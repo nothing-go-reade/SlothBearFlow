@@ -4,6 +4,7 @@ from functools import lru_cache
 from typing import Optional
 
 from pydantic import Field
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,16 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    llm_provider: str = Field(default="ollama", validation_alias="LLM_PROVIDER")
+    llm_model: str = Field(default="", validation_alias="LLM_MODEL")
+    llm_supports_tools: Optional[bool] = Field(
+        default=None, validation_alias="LLM_SUPPORTS_TOOLS"
+    )
+    embedding_provider: str = Field(
+        default="", validation_alias="EMBEDDING_PROVIDER"
+    )
+    embedding_model: str = Field(default="", validation_alias="EMBEDDING_MODEL")
+
     ollama_model: str = Field(default="deepseek-r1:7b", validation_alias="OLLAMA_MODEL")
     ollama_base_url: str = Field(
         default="http://127.0.0.1:11434", validation_alias="OLLAMA_BASE_URL"
@@ -23,6 +34,16 @@ class Settings(BaseSettings):
     )
     ollama_model_supports_tools: bool = Field(
         default=False, validation_alias="OLLAMA_MODEL_SUPPORTS_TOOLS"
+    )
+
+    openai_model: str = Field(default="gpt-4o-mini", validation_alias="OPENAI_MODEL")
+    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
+    openai_base_url: str = Field(default="", validation_alias="OPENAI_BASE_URL")
+    openai_model_supports_tools: bool = Field(
+        default=True, validation_alias="OPENAI_MODEL_SUPPORTS_TOOLS"
+    )
+    openai_embed_model: str = Field(
+        default="text-embedding-3-small", validation_alias="OPENAI_EMBED_MODEL"
     )
 
     redis_host: str = Field(default="127.0.0.1", validation_alias="REDIS_HOST")
@@ -79,6 +100,13 @@ class Settings(BaseSettings):
     error_log_file: str = Field(
         default="error.log", validation_alias="ERROR_LOG_FILE"
     )
+
+    @field_validator("llm_supports_tools", mode="before")
+    @classmethod
+    def _empty_llm_supports_tools_to_none(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
 
 
 @lru_cache

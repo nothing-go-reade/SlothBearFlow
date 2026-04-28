@@ -978,3 +978,241 @@ TypeError: StopIteration interacts badly with generators and cannot be raised in
 2026-04-27 19:55:32,180 | INFO | app.main | health session load done in 0.001s backend=memory messages=0
 2026-04-27 19:55:32,180 | INFO | app.main | health done in 0.002s
 2026-04-27 19:58:17,779 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:27:52,355 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:27:52,357 | INFO | app.main | health start
+2026-04-28 09:27:52,357 | INFO | app.main | health settings loaded in 0.000s
+2026-04-28 09:27:52,357 | INFO | app.main | health redis ping start
+2026-04-28 09:27:52,358 | INFO | app.main | health redis ping done in 0.000s ok=False error=Error 1 connecting to 127.0.0.1:6379. Operation not permitted.
+2026-04-28 09:27:52,358 | INFO | app.main | health milvus status start
+2026-04-28 09:27:52,358 | INFO | app.main | health milvus status done in 0.000s status={'enabled': False, 'reason': 'SKIP_MILVUS=true'}
+2026-04-28 09:27:52,359 | INFO | app.main | health session load start
+2026-04-28 09:27:52,359 | WARNING | app.deps | Redis 不可用，回退到内存会话存储: Error 1 connecting to 127.0.0.1:6379. Operation not permitted.
+2026-04-28 09:27:52,360 | INFO | app.main | health session load done in 0.001s backend=memory messages=0
+2026-04-28 09:27:52,360 | INFO | app.main | health done in 0.004s
+2026-04-28 09:27:52,361 | INFO | httpx | HTTP Request: GET http://testserver/health "HTTP/1.1 200 OK"
+2026-04-28 09:27:52,362 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:27:52,366 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:27:52,367 | INFO | httpx | HTTP Request: GET http://testserver/ "HTTP/1.1 200 OK"
+2026-04-28 09:27:52,368 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:27:52,389 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:27:52,392 | INFO | app.main | chat start session_id=s-stream message_length=2
+2026-04-28 09:27:52,393 | INFO | app.main | chat settings loaded in 0.000s
+2026-04-28 09:27:52,393 | INFO | app.main | chat rag context reset in 0.000s
+2026-04-28 09:27:52,393 | INFO | app.main | chat session load start session_id=s-stream
+2026-04-28 09:27:52,394 | INFO | app.main | chat session load done in 0.000s backend=memory messages=0 summary_chars=0
+2026-04-28 09:27:52,394 | INFO | app.main | chat history prepared in 0.000s total_messages=0 windowed_messages=0
+2026-04-28 09:27:52,394 | INFO | app.main | chat vector store prepare start
+2026-04-28 09:27:52,395 | INFO | app.main | chat vector store prepare done in 0.000s enabled=False
+2026-04-28 09:27:52,395 | INFO | app.main | chat executor build start
+2026-04-28 09:27:52,395 | INFO | app.main | chat executor build done in 0.000s
+2026-04-28 09:27:52,396 | INFO | app.main | chat stream decision enabled=True reason=enabled
+2026-04-28 09:27:52,396 | INFO | app.main | chat streaming response start
+2026-04-28 09:27:52,396 | INFO | app.main | chat streaming response format=sse
+2026-04-28 09:27:52,397 | INFO | app.main | chat streaming response done in 0.000s answer_chars=10
+2026-04-28 09:27:52,397 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-04-28 09:27:52,398 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:27:52,402 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:27:52,403 | INFO | app.main | chat start session_id=s-plain message_length=2
+2026-04-28 09:27:52,403 | INFO | app.main | chat settings loaded in 0.000s
+2026-04-28 09:27:52,404 | INFO | app.main | chat rag context reset in 0.000s
+2026-04-28 09:27:52,404 | INFO | app.main | chat session load start session_id=s-plain
+2026-04-28 09:27:52,404 | INFO | app.main | chat session load done in 0.000s backend=memory messages=0 summary_chars=0
+2026-04-28 09:27:52,405 | INFO | app.main | chat history prepared in 0.000s total_messages=0 windowed_messages=0
+2026-04-28 09:27:52,405 | INFO | app.main | chat vector store prepare start
+2026-04-28 09:27:52,405 | INFO | app.main | chat vector store prepare done in 0.000s enabled=False
+2026-04-28 09:27:52,406 | INFO | app.main | chat executor build start
+2026-04-28 09:27:52,406 | INFO | app.main | chat executor build done in 0.000s
+2026-04-28 09:27:52,406 | INFO | app.main | chat stream decision enabled=True reason=enabled
+2026-04-28 09:27:52,407 | INFO | app.main | chat streaming response start
+2026-04-28 09:27:52,407 | INFO | app.main | chat streaming response format=plain
+2026-04-28 09:27:52,408 | INFO | app.main | chat streaming response done in 0.000s answer_chars=11
+2026-04-28 09:27:52,408 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-04-28 09:27:52,409 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:27:52,413 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:27:52,414 | INFO | app.main | chat start session_id=s1 message_length=2
+2026-04-28 09:27:52,414 | INFO | app.main | chat settings loaded in 0.000s
+2026-04-28 09:27:52,415 | INFO | app.main | chat rag context reset in 0.000s
+2026-04-28 09:27:52,415 | INFO | app.main | chat session load start session_id=s1
+2026-04-28 09:27:52,415 | INFO | app.main | chat session load done in 0.000s backend=memory messages=0 summary_chars=0
+2026-04-28 09:27:52,416 | INFO | app.main | chat history prepared in 0.000s total_messages=0 windowed_messages=0
+2026-04-28 09:27:52,416 | INFO | app.main | chat vector store prepare start
+2026-04-28 09:27:52,416 | INFO | app.main | chat vector store prepare done in 0.000s enabled=False
+2026-04-28 09:27:52,417 | INFO | app.main | chat executor build start
+2026-04-28 09:27:52,417 | INFO | app.main | chat executor build done in 0.000s
+2026-04-28 09:27:52,417 | INFO | app.main | chat stream decision enabled=False reason=executor_not_streamable
+2026-04-28 09:27:52,418 | INFO | app.main | chat agent invoke start
+2026-04-28 09:27:52,418 | INFO | app.main | chat agent invoke done in 0.000s result_keys=['output']
+2026-04-28 09:27:52,419 | INFO | app.main | chat result parsed in 0.000s raw_chars=8 citations=0 tools=[]
+2026-04-28 09:27:52,419 | INFO | app.main | chat session save start
+2026-04-28 09:27:52,419 | INFO | app.main | chat session save done in 0.000s
+2026-04-28 09:27:52,420 | INFO | app.main | chat done in 0.006s
+2026-04-28 09:27:52,420 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-04-28 09:27:52,421 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:27:52,425 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:27:52,426 | INFO | app.main | chat start session_id=s-pg message_length=2
+2026-04-28 09:27:52,426 | INFO | app.main | chat settings loaded in 0.000s
+2026-04-28 09:27:52,427 | INFO | app.main | chat rag context reset in 0.000s
+2026-04-28 09:27:52,427 | INFO | app.main | chat session load start session_id=s-pg
+2026-04-28 09:27:52,427 | INFO | app.main | chat session load done in 0.000s backend=memory messages=0 summary_chars=0
+2026-04-28 09:27:52,428 | INFO | app.main | chat history prepared in 0.000s total_messages=0 windowed_messages=0
+2026-04-28 09:27:52,428 | INFO | app.main | chat vector store prepare start
+2026-04-28 09:27:52,428 | INFO | app.main | chat vector store prepare done in 0.000s enabled=False
+2026-04-28 09:27:52,429 | INFO | app.main | chat executor build start
+2026-04-28 09:27:52,429 | INFO | app.main | chat executor build done in 0.000s
+2026-04-28 09:27:52,429 | INFO | app.main | chat stream decision enabled=False reason=executor_not_streamable
+2026-04-28 09:27:52,430 | INFO | app.main | chat agent invoke start
+2026-04-28 09:27:52,430 | INFO | app.main | chat agent invoke done in 0.001s result_keys=['output']
+2026-04-28 09:27:52,431 | INFO | app.main | chat result parsed in 0.000s raw_chars=8 citations=0 tools=[]
+2026-04-28 09:27:52,431 | INFO | app.main | chat session save start
+2026-04-28 09:27:52,431 | INFO | app.main | chat session save done in 0.000s
+2026-04-28 09:27:52,432 | INFO | app.main | chat done in 0.006s
+2026-04-28 09:27:52,432 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-04-28 09:27:52,433 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:27:52,437 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:27:52,438 | INFO | httpx | HTTP Request: POST http://testserver/ingest "HTTP/1.1 400 Bad Request"
+2026-04-28 09:27:52,440 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:27:52,444 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:27:52,445 | INFO | httpx | HTTP Request: POST http://testserver/ingest "HTTP/1.1 200 OK"
+2026-04-28 09:27:52,445 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:27:52,450 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:27:52,450 | INFO | httpx | HTTP Request: POST http://testserver/ingest "HTTP/1.1 200 OK"
+2026-04-28 09:27:52,451 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:27:52,455 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:27:52,456 | INFO | app.main | chat start session_id=rag-1 message_length=8
+2026-04-28 09:27:52,456 | INFO | app.main | chat settings loaded in 0.000s
+2026-04-28 09:27:52,456 | INFO | app.main | chat rag context reset in 0.000s
+2026-04-28 09:27:52,457 | INFO | app.main | chat session load start session_id=rag-1
+2026-04-28 09:27:52,457 | INFO | app.main | chat session load done in 0.000s backend=memory messages=0 summary_chars=0
+2026-04-28 09:27:52,457 | INFO | app.main | chat history prepared in 0.000s total_messages=0 windowed_messages=0
+2026-04-28 09:27:52,458 | INFO | app.main | chat vector store prepare start
+2026-04-28 09:27:52,458 | INFO | app.main | chat vector store prepare done in 0.000s enabled=True
+2026-04-28 09:27:52,458 | INFO | app.main | chat executor build start
+2026-04-28 09:27:52,459 | INFO | app.main | chat executor build done in 0.000s
+2026-04-28 09:27:52,459 | INFO | app.main | chat stream decision enabled=False reason=executor_not_streamable
+2026-04-28 09:27:52,459 | INFO | app.main | chat agent invoke start
+2026-04-28 09:27:52,460 | INFO | app.main | chat agent invoke done in 0.000s result_keys=['output']
+2026-04-28 09:27:52,460 | INFO | app.main | chat result parsed in 0.000s raw_chars=17 citations=1 tools=['search_knowledge']
+2026-04-28 09:27:52,461 | INFO | app.main | chat session save start
+2026-04-28 09:27:52,461 | INFO | app.main | chat session save done in 0.000s
+2026-04-28 09:27:52,461 | INFO | app.main | chat done in 0.006s
+2026-04-28 09:27:52,462 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-04-28 09:27:52,462 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:31:33,311 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:31:33,313 | INFO | app.main | health start
+2026-04-28 09:31:33,313 | INFO | app.main | health settings loaded in 0.000s
+2026-04-28 09:31:33,313 | INFO | app.main | health redis ping start
+2026-04-28 09:31:33,314 | INFO | app.main | health redis ping done in 0.001s ok=False error=Error 1 connecting to 127.0.0.1:6379. Operation not permitted.
+2026-04-28 09:31:33,314 | INFO | app.main | health milvus status start
+2026-04-28 09:31:33,315 | INFO | app.main | health milvus status done in 0.000s status={'enabled': False, 'reason': 'SKIP_MILVUS=true'}
+2026-04-28 09:31:33,315 | INFO | app.main | health session load start
+2026-04-28 09:31:33,316 | WARNING | app.deps | Redis 不可用，回退到内存会话存储: Error 1 connecting to 127.0.0.1:6379. Operation not permitted.
+2026-04-28 09:31:33,316 | INFO | app.main | health session load done in 0.001s backend=memory messages=0
+2026-04-28 09:31:33,316 | INFO | app.main | health done in 0.003s
+2026-04-28 09:31:33,317 | INFO | httpx | HTTP Request: GET http://testserver/health "HTTP/1.1 200 OK"
+2026-04-28 09:31:33,318 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:31:33,323 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:31:33,324 | INFO | httpx | HTTP Request: GET http://testserver/ "HTTP/1.1 200 OK"
+2026-04-28 09:31:33,324 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:31:33,394 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:31:33,399 | INFO | app.main | chat start session_id=s-stream message_length=2
+2026-04-28 09:31:33,399 | INFO | app.main | chat settings loaded in 0.000s
+2026-04-28 09:31:33,400 | INFO | app.main | chat rag context reset in 0.000s
+2026-04-28 09:31:33,400 | INFO | app.main | chat session load start session_id=s-stream
+2026-04-28 09:31:33,400 | INFO | app.main | chat session load done in 0.000s backend=memory messages=0 summary_chars=0
+2026-04-28 09:31:33,401 | INFO | app.main | chat history prepared in 0.000s total_messages=0 windowed_messages=0
+2026-04-28 09:31:33,401 | INFO | app.main | chat vector store prepare start
+2026-04-28 09:31:33,401 | INFO | app.main | chat vector store prepare done in 0.000s enabled=False
+2026-04-28 09:31:33,402 | INFO | app.main | chat executor build start
+2026-04-28 09:31:33,402 | INFO | app.main | chat executor build done in 0.000s
+2026-04-28 09:31:33,402 | INFO | app.main | chat stream decision enabled=True reason=enabled
+2026-04-28 09:31:33,403 | INFO | app.main | chat streaming response start
+2026-04-28 09:31:33,403 | INFO | app.main | chat streaming response format=sse
+2026-04-28 09:31:33,404 | INFO | app.main | chat streaming response done in 0.000s answer_chars=10
+2026-04-28 09:31:33,404 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-04-28 09:31:33,405 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:31:33,409 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:31:33,410 | INFO | app.main | chat start session_id=s-plain message_length=2
+2026-04-28 09:31:33,411 | INFO | app.main | chat settings loaded in 0.001s
+2026-04-28 09:31:33,411 | INFO | app.main | chat rag context reset in 0.000s
+2026-04-28 09:31:33,412 | INFO | app.main | chat session load start session_id=s-plain
+2026-04-28 09:31:33,412 | INFO | app.main | chat session load done in 0.000s backend=memory messages=0 summary_chars=0
+2026-04-28 09:31:33,412 | INFO | app.main | chat history prepared in 0.000s total_messages=0 windowed_messages=0
+2026-04-28 09:31:33,413 | INFO | app.main | chat vector store prepare start
+2026-04-28 09:31:33,413 | INFO | app.main | chat vector store prepare done in 0.000s enabled=False
+2026-04-28 09:31:33,413 | INFO | app.main | chat executor build start
+2026-04-28 09:31:33,414 | INFO | app.main | chat executor build done in 0.000s
+2026-04-28 09:31:33,414 | INFO | app.main | chat stream decision enabled=True reason=enabled
+2026-04-28 09:31:33,414 | INFO | app.main | chat streaming response start
+2026-04-28 09:31:33,415 | INFO | app.main | chat streaming response format=plain
+2026-04-28 09:31:33,415 | INFO | app.main | chat streaming response done in 0.000s answer_chars=11
+2026-04-28 09:31:33,416 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-04-28 09:31:33,416 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:31:33,421 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:31:33,422 | INFO | app.main | chat start session_id=s1 message_length=2
+2026-04-28 09:31:33,422 | INFO | app.main | chat settings loaded in 0.000s
+2026-04-28 09:31:33,422 | INFO | app.main | chat rag context reset in 0.000s
+2026-04-28 09:31:33,423 | INFO | app.main | chat session load start session_id=s1
+2026-04-28 09:31:33,423 | INFO | app.main | chat session load done in 0.000s backend=memory messages=0 summary_chars=0
+2026-04-28 09:31:33,423 | INFO | app.main | chat history prepared in 0.000s total_messages=0 windowed_messages=0
+2026-04-28 09:31:33,424 | INFO | app.main | chat vector store prepare start
+2026-04-28 09:31:33,424 | INFO | app.main | chat vector store prepare done in 0.000s enabled=False
+2026-04-28 09:31:33,424 | INFO | app.main | chat executor build start
+2026-04-28 09:31:33,425 | INFO | app.main | chat executor build done in 0.000s
+2026-04-28 09:31:33,425 | INFO | app.main | chat stream decision enabled=False reason=executor_not_streamable
+2026-04-28 09:31:33,425 | INFO | app.main | chat agent invoke start
+2026-04-28 09:31:33,426 | INFO | app.main | chat agent invoke done in 0.000s result_keys=['output']
+2026-04-28 09:31:33,426 | INFO | app.main | chat result parsed in 0.000s raw_chars=8 citations=0 tools=[]
+2026-04-28 09:31:33,426 | INFO | app.main | chat session save start
+2026-04-28 09:31:33,427 | INFO | app.main | chat session save done in 0.000s
+2026-04-28 09:31:33,427 | INFO | app.main | chat done in 0.006s
+2026-04-28 09:31:33,428 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-04-28 09:31:33,428 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:31:33,433 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:31:33,434 | INFO | app.main | chat start session_id=s-pg message_length=2
+2026-04-28 09:31:33,434 | INFO | app.main | chat settings loaded in 0.000s
+2026-04-28 09:31:33,435 | INFO | app.main | chat rag context reset in 0.000s
+2026-04-28 09:31:33,435 | INFO | app.main | chat session load start session_id=s-pg
+2026-04-28 09:31:33,435 | INFO | app.main | chat session load done in 0.000s backend=memory messages=0 summary_chars=0
+2026-04-28 09:31:33,436 | INFO | app.main | chat history prepared in 0.000s total_messages=0 windowed_messages=0
+2026-04-28 09:31:33,436 | INFO | app.main | chat vector store prepare start
+2026-04-28 09:31:33,436 | INFO | app.main | chat vector store prepare done in 0.000s enabled=False
+2026-04-28 09:31:33,437 | INFO | app.main | chat executor build start
+2026-04-28 09:31:33,437 | INFO | app.main | chat executor build done in 0.000s
+2026-04-28 09:31:33,437 | INFO | app.main | chat stream decision enabled=False reason=executor_not_streamable
+2026-04-28 09:31:33,438 | INFO | app.main | chat agent invoke start
+2026-04-28 09:31:33,438 | INFO | app.main | chat agent invoke done in 0.000s result_keys=['output']
+2026-04-28 09:31:33,438 | INFO | app.main | chat result parsed in 0.000s raw_chars=8 citations=0 tools=[]
+2026-04-28 09:31:33,439 | INFO | app.main | chat session save start
+2026-04-28 09:31:33,439 | INFO | app.main | chat session save done in 0.000s
+2026-04-28 09:31:33,439 | INFO | app.main | chat done in 0.006s
+2026-04-28 09:31:33,440 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-04-28 09:31:33,440 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:31:33,445 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:31:33,446 | INFO | httpx | HTTP Request: POST http://testserver/ingest "HTTP/1.1 400 Bad Request"
+2026-04-28 09:31:33,447 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:31:33,452 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:31:33,453 | INFO | httpx | HTTP Request: POST http://testserver/ingest "HTTP/1.1 200 OK"
+2026-04-28 09:31:33,453 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:31:33,457 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:31:33,458 | INFO | httpx | HTTP Request: POST http://testserver/ingest "HTTP/1.1 200 OK"
+2026-04-28 09:31:33,459 | INFO | app.main | 后台 worker 已停止
+2026-04-28 09:31:33,464 | INFO | app.main | 后台 worker 已启动
+2026-04-28 09:31:33,464 | INFO | app.main | chat start session_id=rag-1 message_length=8
+2026-04-28 09:31:33,465 | INFO | app.main | chat settings loaded in 0.000s
+2026-04-28 09:31:33,465 | INFO | app.main | chat rag context reset in 0.000s
+2026-04-28 09:31:33,465 | INFO | app.main | chat session load start session_id=rag-1
+2026-04-28 09:31:33,466 | INFO | app.main | chat session load done in 0.000s backend=memory messages=0 summary_chars=0
+2026-04-28 09:31:33,466 | INFO | app.main | chat history prepared in 0.000s total_messages=0 windowed_messages=0
+2026-04-28 09:31:33,466 | INFO | app.main | chat vector store prepare start
+2026-04-28 09:31:33,467 | INFO | app.main | chat vector store prepare done in 0.000s enabled=True
+2026-04-28 09:31:33,467 | INFO | app.main | chat executor build start
+2026-04-28 09:31:33,467 | INFO | app.main | chat executor build done in 0.000s
+2026-04-28 09:31:33,468 | INFO | app.main | chat stream decision enabled=False reason=executor_not_streamable
+2026-04-28 09:31:33,468 | INFO | app.main | chat agent invoke start
+2026-04-28 09:31:33,469 | INFO | app.main | chat agent invoke done in 0.000s result_keys=['output']
+2026-04-28 09:31:33,469 | INFO | app.main | chat result parsed in 0.000s raw_chars=17 citations=1 tools=['search_knowledge']
+2026-04-28 09:31:33,469 | INFO | app.main | chat session save start
+2026-04-28 09:31:33,470 | INFO | app.main | chat session save done in 0.000s
+2026-04-28 09:31:33,470 | INFO | app.main | chat done in 0.006s
+2026-04-28 09:31:33,471 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-04-28 09:31:33,471 | INFO | app.main | 后台 worker 已停止

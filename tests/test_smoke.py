@@ -26,6 +26,8 @@ def test_health_ok() -> None:
     assert "redis" in body
     assert "milvus" in body
     assert "session_store" in body
+    assert "llm" in body
+    assert "embedding" in body
 
 
 def test_root_ok() -> None:
@@ -43,8 +45,11 @@ def test_config_loads() -> None:
     from app.config import get_settings
 
     s = get_settings()
+    assert s.llm_provider in {"ollama", "openai"}
     assert s.ollama_base_url.startswith("http")
     assert isinstance(s.ollama_model_supports_tools, bool)
+    assert isinstance(s.openai_model_supports_tools, bool)
+    assert s.openai_embed_model
     assert s.redis_socket_timeout > 0
     assert s.milvus_timeout > 0
     assert s.app_log_file.endswith(".log")
@@ -53,6 +58,7 @@ def test_config_loads() -> None:
 
 
 def test_build_agent_executor_falls_back_when_model_has_no_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("OLLAMA_MODEL_SUPPORTS_TOOLS", "false")
     from app.agent.agent_executor import BasicChatExecutor, build_agent_executor
     from app.config import get_settings
@@ -60,6 +66,103 @@ def test_build_agent_executor_falls_back_when_model_has_no_tools(monkeypatch: py
     get_settings.cache_clear()
     executor = build_agent_executor(vector_store=None, chat_history=[], rolling_summary=None)
     assert isinstance(executor, BasicChatExecutor)
+
+
+def test_get_chat_llm_uses_ollama_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:7b")
+    from app.config import get_settings
+    from app.llm import get_chat_llm
+
+    captured = {}
+
+    class FakeChatOllama:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("app.llm.build_ollama_chat_model", lambda **kwargs: FakeChatOllama(**kwargs))
+    get_settings.cache_clear()
+    llm = get_chat_llm(get_settings(), temperature=0.3)
+
+    assert isinstance(llm, FakeChatOllama)
+    assert captured["model"] == "qwen2.5:7b"
+    assert captured["temperature"] == 0.3
+
+
+def test_get_chat_llm_uses_openai_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("OPENAI_API_KEY", "demo-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.com/v1")
+    from app.config import get_settings
+    from app.llm import get_chat_llm, llm_supports_tools
+
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("app.llm.build_openai_chat_model", lambda **kwargs: FakeChatOpenAI(**kwargs))
+    get_settings.cache_clear()
+    llm = get_chat_llm(get_settings(), temperature=0.1)
+
+    assert isinstance(llm, FakeChatOpenAI)
+    assert captured["model"] == "gpt-4o-mini"
+    assert captured["api_key"] == "demo-key"
+    assert captured["base_url"] == "https://example.com/v1"
+    assert captured["temperature"] == 0.1
+    assert llm_supports_tools(get_settings()) is True
+
+
+def test_get_embedding_function_uses_ollama_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+    from app.config import get_settings
+    from app.rag.embedding import get_embedding_function
+
+    captured = {}
+
+    class FakeEmbeddings:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "app.rag.embedding.build_ollama_embeddings",
+        lambda **kwargs: FakeEmbeddings(**kwargs),
+    )
+    get_settings.cache_clear()
+    emb = get_embedding_function(get_settings())
+
+    assert isinstance(emb, FakeEmbeddings)
+    assert captured["model"] == "nomic-embed-text"
+
+
+def test_get_embedding_function_uses_openai_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+    monkeypatch.setenv("OPENAI_API_KEY", "demo-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.com/v1")
+    from app.config import get_settings
+    from app.rag.embedding import get_embedding_function
+
+    captured = {}
+
+    class FakeEmbeddings:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "app.rag.embedding.build_openai_embeddings",
+        lambda **kwargs: FakeEmbeddings(**kwargs),
+    )
+    get_settings.cache_clear()
+    emb = get_embedding_function(get_settings())
+
+    assert isinstance(emb, FakeEmbeddings)
+    assert captured["model"] == "text-embedding-3-small"
+    assert captured["api_key"] == "demo-key"
+    assert captured["base_url"] == "https://example.com/v1"
 
 
 def test_config_defaults_to_plain_text_output() -> None:

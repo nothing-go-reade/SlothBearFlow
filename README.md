@@ -94,6 +94,18 @@ If you only want to verify that the Ollama model is reachable:
 
 ## Configuration Flags
 
+LLM provider selection:
+
+- `LLM_PROVIDER=ollama` uses the local Ollama deployment
+- `LLM_PROVIDER=openai` uses OpenAI or an OpenAI-compatible cloud endpoint
+- `LLM_MODEL` can override the provider-specific default model
+- `LLM_SUPPORTS_TOOLS` can force tool-calling on or off across providers
+- `OPENAI_BASE_URL` can be used with OpenAI-compatible vendors
+- `OPENAI_API_KEY` is required when using `LLM_PROVIDER=openai`
+- `EMBEDDING_PROVIDER` defaults to `LLM_PROVIDER`, but can be set independently
+- `EMBEDDING_MODEL` can override the provider-specific default embedding model
+- `OPENAI_EMBED_MODEL` controls the default OpenAI embedding model
+
 - Disable RAG: set `USE_RAG=false`
 - Skip Milvus initialization: set `SKIP_MILVUS=true`
 - Disable the second-pass structured formatter: set `STRUCTURED_OUTPUT=false`
@@ -112,6 +124,16 @@ Chat request:
 curl -X POST http://127.0.0.1:8000/chat \
   -H 'Content-Type: application/json' \
   -d '{"session_id":"demo-1","message":"Please summarize the refund process for me."}'
+```
+
+Example OpenAI-compatible configuration:
+
+```bash
+export LLM_PROVIDER=openai
+export OPENAI_MODEL=gpt-4o-mini
+export OPENAI_API_KEY=your_api_key
+export OPENAI_EMBED_MODEL=text-embedding-3-small
+./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Ingest request:

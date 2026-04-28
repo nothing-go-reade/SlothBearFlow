@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from uvicorn.logging import AccessFormatter
 
 from app import build_agent_executor, get_settings
+from app.llm import get_llm_model_name
+from app.rag.embedding import get_embedding_model_name, get_embedding_provider
 from app.deps import InMemoryRedis, ping_redis
 from app.memory.redis_memory import (
     append_turn_and_save,
@@ -45,6 +47,9 @@ def _configure_logging() -> None:
         "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
     )
     access_formatter = AccessFormatter(
+        '%(asctime)s | %(levelname)s | %(name)s | %(client_addr)s - "%(request_line)s" %(status_code)s'
+    )
+    access_file_formatter = logging.Formatter(
         '%(asctime)s | %(levelname)s | %(name)s | %(client_addr)s - "%(request_line)s" %(status_code)s'
     )
 
@@ -108,7 +113,7 @@ def _configure_logging() -> None:
         uvicorn_access_logger,
         access_log_path,
         level=log_level,
-        formatter=access_formatter,
+        formatter=access_file_formatter,
     )
 
 
@@ -251,6 +256,14 @@ def health() -> Dict[str, Any]:
         },
         "milvus": vs_status,
         "postgres_persistence": postgres_persistence.get_status(settings),
+        "llm": {
+            "provider": settings.llm_provider,
+            "model": get_llm_model_name(settings),
+        },
+        "embedding": {
+            "provider": get_embedding_provider(settings),
+            "model": get_embedding_model_name(settings),
+        },
         "ollama_base_url": settings.ollama_base_url,
     }
     logger.info("health done in %.3fs", time.perf_counter() - started_at)

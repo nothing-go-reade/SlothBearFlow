@@ -5,7 +5,14 @@ from typing import Any, Optional
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.runnables import RunnableSerializable
 
-from app import Settings, build_tools, get_agent_prompt, get_chat_llm, get_settings
+from app import (
+    Settings,
+    build_tools,
+    get_agent_prompt,
+    get_chat_llm,
+    get_settings,
+    llm_supports_tools,
+)
 from app.prompt import get_basic_chat_prompt
 
 
@@ -41,7 +48,7 @@ def build_agent_executor(
     settings = settings or get_settings()
     llm = get_chat_llm(settings)
 
-    if not settings.ollama_model_supports_tools:
+    if not llm_supports_tools(settings):
         prompt = get_basic_chat_prompt(
             rolling_summary=rolling_summary,
             structured_output=settings.structured_output,
