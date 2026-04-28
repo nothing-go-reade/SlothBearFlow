@@ -94,6 +94,18 @@ def test_get_chat_llm_uses_openai_provider(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
     monkeypatch.setenv("OPENAI_API_KEY", "demo-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.com/v1")
+    monkeypatch.setenv("LLM_TEMPERATURE", "0.7")
+    monkeypatch.setenv("OPENAI_TEMPERATURE", "0.2")
+    monkeypatch.setenv("LLM_TOP_P", "0.95")
+    monkeypatch.setenv("OPENAI_TOP_P", "0.8")
+    monkeypatch.setenv("LLM_MAX_TOKENS", "2048")
+    monkeypatch.setenv("OPENAI_MAX_TOKENS", "1024")
+    monkeypatch.setenv("LLM_MODEL_KWARGS_JSON", '{"response_format":{"type":"json_object"},"base_only":1}')
+    monkeypatch.setenv("OPENAI_MODEL_KWARGS_JSON", '{"base_only":2,"openai_only":true}')
+    monkeypatch.setenv("LLM_EXTRA_BODY_JSON", '{"vendor":{"a":1},"base_only":1}')
+    monkeypatch.setenv("OPENAI_EXTRA_BODY_JSON", '{"base_only":2,"openai_only":true}')
+    monkeypatch.setenv("LLM_DEEP_THINK", "false")
+    monkeypatch.setenv("OPENAI_REASONING_EFFORT", "medium")
     from app.config import get_settings
     from app.llm import get_chat_llm, llm_supports_tools
 
@@ -105,37 +117,91 @@ def test_get_chat_llm_uses_openai_provider(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr("app.llm.build_openai_chat_model", lambda **kwargs: FakeChatOpenAI(**kwargs))
     get_settings.cache_clear()
-    llm = get_chat_llm(get_settings(), temperature=0.1)
+    llm = get_chat_llm(get_settings())
 
     assert isinstance(llm, FakeChatOpenAI)
     assert captured["model"] == "gpt-4o-mini"
     assert captured["api_key"] == "demo-key"
     assert captured["base_url"] == "https://example.com/v1"
-    assert captured["temperature"] == 0.1
+    assert captured["temperature"] == 0.2
+    assert captured["top_p"] == 0.8
+    assert captured["max_tokens"] == 1024
+    assert captured["reasoning_effort"] == "medium"
+    assert captured["model_kwargs"] == {
+        "response_format": {"type": "json_object"},
+        "base_only": 2,
+        "openai_only": True,
+    }
+    assert captured["extra_body"] == {
+        "vendor": {"a": 1},
+        "base_only": 2,
+        "openai_only": True,
+    }
     assert llm_supports_tools(get_settings()) is True
 
 
-def test_get_embedding_function_uses_ollama_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "ollama")
-    monkeypatch.setenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+def test_get_chat_llm_explicit_temperature_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("OPENAI_TEMPERATURE", "0.8")
     from app.config import get_settings
-    from app.rag.embedding import get_embedding_function
+    from app.llm import get_chat_llm
 
     captured = {}
 
-    class FakeEmbeddings:
+    class FakeChatOpenAI:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr(
-        "app.rag.embedding.build_ollama_embeddings",
-        lambda **kwargs: FakeEmbeddings(**kwargs),
-    )
+    monkeypatch.setattr("app.llm.build_openai_chat_model", lambda **kwargs: FakeChatOpenAI(**kwargs))
     get_settings.cache_clear()
-    emb = get_embedding_function(get_settings())
+    get_chat_llm(get_settings(), temperature=0.1)
 
-    assert isinstance(emb, FakeEmbeddings)
-    assert captured["model"] == "nomic-embed-text"
+    assert captured["temperature"] == 0.1
+
+
+def test_get_chat_llm_deep_think_maps_to_reasoning_high(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("OPENAI_DEEP_THINK", "true")
+    monkeypatch.delenv("OPENAI_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("LLM_REASONING_EFFORT", raising=False)
+    from app.config import get_settings
+    from app.llm import get_chat_llm
+
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("app.llm.build_openai_chat_model", lambda **kwargs: FakeChatOpenAI(**kwargs))
+    get_settings.cache_clear()
+    get_chat_llm(get_settings())
+
+    assert captured["reasoning_effort"] == "high"
+
+
+def test_get_chat_llm_no_reasoning_when_deep_think_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("OPENAI_DEEP_THINK", "false")
+    monkeypatch.delenv("OPENAI_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("LLM_REASONING_EFFORT", raising=False)
+    from app.config import get_settings
+    from app.llm import get_chat_llm
+
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("app.llm.build_openai_chat_model", lambda **kwargs: FakeChatOpenAI(**kwargs))
+    get_settings.cache_clear()
+    get_chat_llm(get_settings())
+
+    assert "reasoning_effort" not in captured
 
 
 def test_get_embedding_function_uses_openai_provider(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -106,6 +106,42 @@ LLM provider selection:
 - `EMBEDDING_MODEL` can override the provider-specific default embedding model
 - `OPENAI_EMBED_MODEL` controls the default OpenAI embedding model
 
+Model parameter config (chat models):
+
+- Global knobs:
+  - `LLM_TEMPERATURE`
+  - `LLM_TOP_P`
+  - `LLM_MAX_TOKENS`
+  - `LLM_DEEP_THINK`
+  - `LLM_REASONING_EFFORT`
+  - `LLM_MODEL_KWARGS_JSON`
+  - `LLM_EXTRA_BODY_JSON`
+- OpenAI/OpenAI-compatible overrides:
+  - `OPENAI_TEMPERATURE`
+  - `OPENAI_TOP_P`
+  - `OPENAI_MAX_TOKENS`
+  - `OPENAI_DEEP_THINK`
+  - `OPENAI_REASONING_EFFORT`
+  - `OPENAI_MODEL_KWARGS_JSON`
+  - `OPENAI_EXTRA_BODY_JSON`
+
+Precedence:
+
+- `temperature`: function arg in code > OpenAI override > global > default `0.2`
+- Other OpenAI params: OpenAI override > global > omitted
+
+Deep-think behavior:
+
+- If `*_REASONING_EFFORT` is explicitly set, it is used directly.
+- Else if `*_DEEP_THINK=true`, it maps to `reasoning_effort=high`.
+- Else reasoning parameters are omitted.
+
+Notes for OpenAI-compatible vendors:
+
+- Put standard/near-standard extras in `*_MODEL_KWARGS_JSON`.
+- Put vendor-private request-body fields in `*_EXTRA_BODY_JSON`.
+- Both JSON fields must be JSON objects.
+
 - Disable RAG: set `USE_RAG=false`
 - Skip Milvus initialization: set `SKIP_MILVUS=true`
 - Disable the second-pass structured formatter: set `STRUCTURED_OUTPUT=false`

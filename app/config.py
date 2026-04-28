@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import Field
 from pydantic import field_validator
@@ -19,6 +20,25 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="", validation_alias="LLM_MODEL")
     llm_supports_tools: Optional[bool] = Field(
         default=None, validation_alias="LLM_SUPPORTS_TOOLS"
+    )
+    llm_temperature: Optional[float] = Field(
+        default=None, validation_alias="LLM_TEMPERATURE"
+    )
+    llm_top_p: Optional[float] = Field(default=None, validation_alias="LLM_TOP_P")
+    llm_max_tokens: Optional[int] = Field(
+        default=None, validation_alias="LLM_MAX_TOKENS"
+    )
+    llm_deep_think: Optional[bool] = Field(
+        default=None, validation_alias="LLM_DEEP_THINK"
+    )
+    llm_reasoning_effort: Optional[str] = Field(
+        default=None, validation_alias="LLM_REASONING_EFFORT"
+    )
+    llm_model_kwargs_json: Optional[dict[str, Any]] = Field(
+        default=None, validation_alias="LLM_MODEL_KWARGS_JSON"
+    )
+    llm_extra_body_json: Optional[dict[str, Any]] = Field(
+        default=None, validation_alias="LLM_EXTRA_BODY_JSON"
     )
     embedding_provider: str = Field(
         default="", validation_alias="EMBEDDING_PROVIDER"
@@ -44,6 +64,27 @@ class Settings(BaseSettings):
     )
     openai_embed_model: str = Field(
         default="text-embedding-3-small", validation_alias="OPENAI_EMBED_MODEL"
+    )
+    openai_temperature: Optional[float] = Field(
+        default=None, validation_alias="OPENAI_TEMPERATURE"
+    )
+    openai_top_p: Optional[float] = Field(
+        default=None, validation_alias="OPENAI_TOP_P"
+    )
+    openai_max_tokens: Optional[int] = Field(
+        default=None, validation_alias="OPENAI_MAX_TOKENS"
+    )
+    openai_deep_think: Optional[bool] = Field(
+        default=None, validation_alias="OPENAI_DEEP_THINK"
+    )
+    openai_reasoning_effort: Optional[str] = Field(
+        default=None, validation_alias="OPENAI_REASONING_EFFORT"
+    )
+    openai_model_kwargs_json: Optional[dict[str, Any]] = Field(
+        default=None, validation_alias="OPENAI_MODEL_KWARGS_JSON"
+    )
+    openai_extra_body_json: Optional[dict[str, Any]] = Field(
+        default=None, validation_alias="OPENAI_EXTRA_BODY_JSON"
     )
 
     redis_host: str = Field(default="127.0.0.1", validation_alias="REDIS_HOST")
@@ -108,7 +149,39 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator(
+        "llm_reasoning_effort",
+        "openai_reasoning_effort",
+        mode="before",
+    )
+    @classmethod
+    def _empty_reasoning_effort_to_none(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
+
+    @field_validator(
+        "llm_model_kwargs_json",
+        "llm_extra_body_json",
+        "openai_model_kwargs_json",
+        "openai_extra_body_json",
+        mode="before",
+    )
+    @classmethod
+    def _parse_json_dict_or_none(cls, value: object) -> object:
+        if value in (None, ""):
+            return None
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+            raise ValueError("JSON config must be an object")
+        raise ValueError("JSON config must be a JSON object string")
+
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
