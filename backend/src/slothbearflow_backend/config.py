@@ -142,7 +142,7 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     log_dir: str = Field(default="logs", validation_alias="LOG_DIR")
-    app_log_file: str = Field(default="slothbearflow_backend.log", validation_alias="APP_LOG_FILE")
+    app_log_file: str = Field(default="backend.src.slothbearflow_backend.log", validation_alias="APP_LOG_FILE")
     access_log_file: str = Field(
         default="access.log", validation_alias="ACCESS_LOG_FILE"
     )

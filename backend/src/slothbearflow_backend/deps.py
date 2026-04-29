@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 import redis
 
-from slothbearflow_backend import Settings, get_settings
+from backend.src.slothbearflow_backend import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 

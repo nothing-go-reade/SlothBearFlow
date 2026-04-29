@@ -55,7 +55,7 @@ docker compose -f backend/docker-compose.yml up -d
 ### 4) Run API server
 
 ```bash
-./.venv/bin/python -m uvicorn slothbearflow_backend.main:app --app-dir backend/src --host 0.0.0.0 --port 8000
+./.venv/bin/python -m uvicorn backend.src.slothbearflow_backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 Then open:

@@ -6,14 +6,14 @@ from typing import Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from slothbearflow_backend import Settings, get_chat_llm, get_settings
-from slothbearflow_backend.deps import get_redis
-from slothbearflow_backend.memory.redis_memory import (
+from backend.src.slothbearflow_backend import Settings, get_chat_llm, get_settings
+from backend.src.slothbearflow_backend.deps import get_redis
+from backend.src.slothbearflow_backend.memory.redis_memory import (
     load_session_payload,
     messages_from_payload,
     update_summary,
 )
-from slothbearflow_backend.persistence.postgres import postgres_persistence
+from backend.src.slothbearflow_backend.persistence.postgres import postgres_persistence
 
 logger = logging.getLogger(__name__)
 

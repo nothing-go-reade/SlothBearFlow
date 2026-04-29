@@ -5,7 +5,7 @@ from typing import Any, Optional
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.runnables import RunnableSerializable
 
-from slothbearflow_backend import (
+from backend.src.slothbearflow_backend import (
     Settings,
     build_tools,
     get_agent_prompt,
@@ -13,7 +13,7 @@ from slothbearflow_backend import (
     get_settings,
     llm_supports_tools,
 )
-from slothbearflow_backend.prompt import get_basic_chat_prompt
+from backend.src.slothbearflow_backend.prompt import get_basic_chat_prompt
 
 
 class BasicChatExecutor:

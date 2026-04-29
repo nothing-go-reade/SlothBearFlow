@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from slothbearflow_backend import Settings, get_settings
+from backend.src.slothbearflow_backend import Settings, get_settings
 
 
 def _normalize_provider(settings: Settings) -> str:

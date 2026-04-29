@@ -5,8 +5,8 @@ from typing import List, Optional
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from slothbearflow_backend import Settings, get_chat_llm, get_settings
-from slothbearflow_backend.output_schema import ChatOutput, Citation
+from backend.src.slothbearflow_backend import Settings, get_chat_llm, get_settings
+from backend.src.slothbearflow_backend.output_schema import ChatOutput, Citation
 
 
 def get_chat_output_parser() -> PydanticOutputParser[ChatOutput]:

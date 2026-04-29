@@ -7,9 +7,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import redis
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from slothbearflow_backend import Settings, get_settings
-from slothbearflow_backend.deps import get_redis
-from slothbearflow_backend.persistence.postgres import postgres_persistence
+from backend.src.slothbearflow_backend import Settings, get_settings
+from backend.src.slothbearflow_backend.deps import get_redis
+from backend.src.slothbearflow_backend.persistence.postgres import postgres_persistence
 
 logger = logging.getLogger(__name__)
 

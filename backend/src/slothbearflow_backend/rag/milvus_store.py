@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from slothbearflow_backend import Settings, get_settings
-from slothbearflow_backend.rag.embedding import get_embedding_function
+from backend.src.slothbearflow_backend import Settings, get_settings
+from backend.src.slothbearflow_backend.rag.embedding import get_embedding_function
 
 logger = logging.getLogger(__name__)
 

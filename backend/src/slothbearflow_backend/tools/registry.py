@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from slothbearflow_backend import Settings, get_settings
-from slothbearflow_backend.tools.rag_tool import build_search_knowledge_tool
-from slothbearflow_backend.tools.session_tool import build_get_session_context_tool
-from slothbearflow_backend.tools.time_tool import get_current_time
-from slothbearflow_backend.tools.weather_tool import get_weather
+from backend.src.slothbearflow_backend import Settings, get_settings
+from backend.src.slothbearflow_backend.tools.rag_tool import build_search_knowledge_tool
+from backend.src.slothbearflow_backend.tools.session_tool import build_get_session_context_tool
+from backend.src.slothbearflow_backend.tools.time_tool import get_current_time
+from backend.src.slothbearflow_backend.tools.weather_tool import get_weather
 
 
 def build_tools(

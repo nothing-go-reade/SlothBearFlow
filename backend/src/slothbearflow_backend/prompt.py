@@ -5,7 +5,7 @@ from typing import Optional
 from langchain_core.messages import SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-from slothbearflow_backend.output_parser import format_instructions
+from backend.src.slothbearflow_backend.output_parser import format_instructions
 
 
 def build_system_prompt(

@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any, Iterable, Optional
 
-from slothbearflow_backend import Settings, get_settings
+from backend.src.slothbearflow_backend import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 

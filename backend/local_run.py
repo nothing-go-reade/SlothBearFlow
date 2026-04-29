@@ -1,4 +1,4 @@
-"""最小 Ollama 探针。完整服务建议使用 `uvicorn slothbearflow_backend.main:app --app-dir backend/src` 启动。"""
+"""最小 Ollama 探针。完整服务建议使用 `uvicorn backend.src.slothbearflow_backend.main:app` 启动。"""
 
 import sys
 

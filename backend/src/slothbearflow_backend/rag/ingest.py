@@ -4,8 +4,8 @@ import logging
 import uuid
 from typing import Any, Optional
 
-from slothbearflow_backend import Settings, get_settings
-from slothbearflow_backend.rag.splitter import split_text_to_documents
+from backend.src.slothbearflow_backend import Settings, get_settings
+from backend.src.slothbearflow_backend.rag.splitter import split_text_to_documents
 
 logger = logging.getLogger(__name__)
 
