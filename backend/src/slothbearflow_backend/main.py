@@ -15,23 +15,23 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from uvicorn.logging import AccessFormatter
 
-from app import build_agent_executor, get_settings
-from app.llm import get_llm_model_name
-from app.rag.embedding import get_embedding_model_name, get_embedding_provider
-from app.deps import InMemoryRedis, ping_redis
-from app.memory.redis_memory import (
+from slothbearflow_backend import build_agent_executor, get_settings
+from slothbearflow_backend.llm import get_llm_model_name
+from slothbearflow_backend.rag.embedding import get_embedding_model_name, get_embedding_provider
+from slothbearflow_backend.deps import InMemoryRedis, ping_redis
+from slothbearflow_backend.memory.redis_memory import (
     append_turn_and_save,
     get_redis_session,
     messages_from_payload,
 )
-from app.memory.short_memory import trim_message_window
-from app.memory.summary_memory import enqueue_summary_update
-from app.output_parser import structured_chat_output_from_text
-from app.output_schema import ChatOutput, Citation
-from app.persistence.postgres import postgres_persistence
-from app.rag.milvus_store import get_vector_store, get_vector_store_status
-from app.tools.rag_tool import get_last_rag_citations, get_last_rag_sources, reset_rag_sources
-from app.worker.background import worker_loop
+from slothbearflow_backend.memory.short_memory import trim_message_window
+from slothbearflow_backend.memory.summary_memory import enqueue_summary_update
+from slothbearflow_backend.output_parser import structured_chat_output_from_text
+from slothbearflow_backend.output_schema import ChatOutput, Citation
+from slothbearflow_backend.persistence.postgres import postgres_persistence
+from slothbearflow_backend.rag.milvus_store import get_vector_store, get_vector_store_status
+from slothbearflow_backend.tools.rag_tool import get_last_rag_citations, get_last_rag_sources, reset_rag_sources
+from slothbearflow_backend.worker.background import worker_loop
 
 
 def _configure_logging() -> None:

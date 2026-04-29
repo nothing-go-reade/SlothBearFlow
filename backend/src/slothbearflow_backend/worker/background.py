@@ -4,11 +4,11 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 
-from app import Settings, get_settings
-from app.memory.summary_memory import run_summary_job
-from app.persistence.postgres import postgres_persistence
-from app.rag.ingest import ingest_plain_text
-from app.rag.milvus_store import get_vector_store
+from slothbearflow_backend import Settings, get_settings
+from slothbearflow_backend.memory.summary_memory import run_summary_job
+from slothbearflow_backend.persistence.postgres import postgres_persistence
+from slothbearflow_backend.rag.ingest import ingest_plain_text
+from slothbearflow_backend.rag.milvus_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 

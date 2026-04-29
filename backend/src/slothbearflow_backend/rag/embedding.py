@@ -4,7 +4,7 @@ from typing import Optional
 
 from langchain_core.embeddings import Embeddings
 
-from app import Settings, get_settings
+from slothbearflow_backend import Settings, get_settings
 
 
 def get_embedding_provider(settings: Optional[Settings] = None) -> str:
