@@ -90,6 +90,14 @@ Main flags (via `.env`):
 - `ENABLE_POSTGRES_PERSISTENCE=false|true`
 - `POSTGRES_RESTORE_ON_REDIS_MISS=false|true`
 - `POSTGRES_RESTORE_TURN_LIMIT=20`
+- `ENABLE_EXPLICIT_REACT_RUNTIME=false|true`
+- `REACT_MAX_STEPS=4`
+- `REACT_TOOL_TIMEOUT_SEC=15`
+- `REACT_STREAM_THOUGHTS=false|true`
+
+ReAct runtime notes:
+- With `ENABLE_EXPLICIT_REACT_RUNTIME=false` (default), `/chat` keeps current LangChain AgentExecutor behavior.
+- With `ENABLE_EXPLICIT_REACT_RUNTIME=true`, `/chat` uses an explicit bounded ReAct loop while keeping response schema unchanged.
 
 See `backend/.env.example` for full options.
 

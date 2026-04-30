@@ -13,7 +13,8 @@ from backend.src.slothbearflow_backend import (
     get_settings,
     llm_supports_tools,
 )
-from backend.src.slothbearflow_backend.prompt import get_basic_chat_prompt
+from backend.src.slothbearflow_backend.agent.react_runtime import ExplicitReActRuntime
+from backend.src.slothbearflow_backend.prompt import build_system_prompt, get_basic_chat_prompt
 
 
 class BasicChatExecutor:
@@ -43,8 +44,7 @@ def build_agent_executor(
     chat_history: Optional[list[Any]] = None,
     rolling_summary: Optional[str] = None,
     settings: Optional[Settings] = None,
-) -> AgentExecutor:
-    """构建生产级 AgentExecutor（导入路径已全局修复为 langchains.app）。"""
+) -> Any:
     settings = settings or get_settings()
     llm = get_chat_llm(settings)
 
@@ -56,6 +56,37 @@ def build_agent_executor(
         return BasicChatExecutor(prompt | llm)
 
     tools = build_tools(vector_store, chat_history=chat_history, settings=settings)
+
+    if settings.enable_explicit_react_runtime:
+        system_prompt = build_system_prompt(
+            rolling_summary=rolling_summary,
+            supports_tools=True,
+            structured_output=settings.structured_output,
+        )
+
+        class ReActExecutorAdapter(ExplicitReActRuntime):
+            def invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+                runtime_payload = {
+                    **payload,
+                    "chat_history": list(chat_history or []),
+                    "system_prompt": system_prompt,
+                }
+                return super().invoke(runtime_payload)
+
+            def stream(self, payload: dict[str, Any]):
+                runtime_payload = {
+                    **payload,
+                    "chat_history": list(chat_history or []),
+                    "system_prompt": system_prompt,
+                }
+                yield from super().stream(runtime_payload)
+
+        return ReActExecutorAdapter(
+            llm=llm,
+            tools=tools,
+            max_steps=settings.react_max_steps,
+        )
+
     prompt = get_agent_prompt(
         rolling_summary=rolling_summary,
         structured_output=settings.structured_output,

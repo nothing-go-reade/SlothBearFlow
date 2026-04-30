@@ -68,6 +68,78 @@ def test_build_agent_executor_falls_back_when_model_has_no_tools(monkeypatch: py
     assert isinstance(executor, BasicChatExecutor)
 
 
+def test_build_agent_executor_uses_explicit_react_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENABLE_EXPLICIT_REACT_RUNTIME", "true")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_MODEL_SUPPORTS_TOOLS", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "demo-key")
+    from backend.src.slothbearflow_backend.agent.agent_executor import build_agent_executor
+    from backend.src.slothbearflow_backend.agent.react_runtime import ExplicitReActRuntime
+    from backend.src.slothbearflow_backend.config import get_settings
+
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.agent.agent_executor.get_chat_llm",
+        lambda settings=None: object(),
+    )
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.agent.agent_executor.llm_supports_tools",
+        lambda settings=None: True,
+    )
+
+    class DummyTool:
+        name = "dummy"
+
+        def invoke(self, payload):
+            return "ok"
+
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.agent.agent_executor.build_tools",
+        lambda vector_store, chat_history=None, settings=None: [DummyTool()],
+    )
+    get_settings.cache_clear()
+    executor = build_agent_executor(vector_store=None, chat_history=[], rolling_summary=None)
+    assert isinstance(executor, ExplicitReActRuntime)
+
+
+def test_explicit_react_runtime_stops_on_max_steps() -> None:
+    from langchain_core.messages import AIMessage
+
+    from backend.src.slothbearflow_backend.agent.react_runtime import ExplicitReActRuntime
+
+    class DummyBoundLLM:
+        def invoke(self, messages):
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "dummy_tool",
+                        "args": {},
+                        "id": "call-1",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+
+    class DummyLLM:
+        def bind_tools(self, tools):
+            return DummyBoundLLM()
+
+    class DummyTool:
+        name = "dummy_tool"
+
+        def invoke(self, payload):
+            return "dummy observation"
+
+    runtime = ExplicitReActRuntime(llm=DummyLLM(), tools=[DummyTool()], max_steps=1)
+    result = runtime.invoke({"input": "test"})
+
+    assert result["stop_reason"] == "max_steps"
+    assert result["steps"] == 1
+    assert "dummy_tool" in result["tools_used"]
+    assert isinstance(result["output"], str)
+    assert result["output"]
+
+
 def test_get_chat_llm_uses_ollama_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:7b")
@@ -238,6 +310,10 @@ def test_config_defaults_to_plain_text_output() -> None:
     assert s.stream_output is False
     assert s.structured_output is False
     assert s.enable_postgres_persistence is False
+    assert s.enable_explicit_react_runtime is False
+    assert s.react_max_steps == 4
+    assert s.react_stream_thoughts is False
+    assert s.react_tool_timeout_sec > 0
 
 
 def test_chat_streams_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:

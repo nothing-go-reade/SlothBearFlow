@@ -119,6 +119,17 @@ class Settings(BaseSettings):
         default=False, validation_alias="STRUCTURED_OUTPUT"
     )
 
+    react_max_steps: int = Field(default=4, validation_alias="REACT_MAX_STEPS")
+    react_tool_timeout_sec: float = Field(
+        default=15.0, validation_alias="REACT_TOOL_TIMEOUT_SEC"
+    )
+    react_stream_thoughts: bool = Field(
+        default=False, validation_alias="REACT_STREAM_THOUGHTS"
+    )
+    enable_explicit_react_runtime: bool = Field(
+        default=False, validation_alias="ENABLE_EXPLICIT_REACT_RUNTIME"
+    )
+
     job_queue_max: int = Field(default=256, validation_alias="JOB_QUEUE_MAX")
     async_summary_update: bool = Field(
         default=True, validation_alias="ASYNC_SUMMARY_UPDATE"
