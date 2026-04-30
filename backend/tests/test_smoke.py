@@ -567,6 +567,45 @@ def test_restore_from_postgres_on_redis_miss(monkeypatch: pytest.MonkeyPatch) ->
     assert len(payload["messages"]) == 2
 
 
+def test_restore_from_postgres_on_redis_miss_uses_configured_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("POSTGRES_RESTORE_ON_REDIS_MISS", "true")
+    monkeypatch.setenv("POSTGRES_RESTORE_REDIS_TTL_SEC", "123")
+    from backend.src.slothbearflow_backend.config import get_settings
+    from backend.src.slothbearflow_backend.deps import InMemoryRedis
+    from backend.src.slothbearflow_backend.memory.redis_memory import get_redis_session
+
+    cache = InMemoryRedis()
+    captured: list[int] = []
+
+    monkeypatch.setattr("backend.src.slothbearflow_backend.memory.redis_memory.get_redis", lambda settings=None: cache)
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.memory.redis_memory.postgres_persistence.load_session_snapshot",
+        lambda **kwargs: {
+            "messages": [
+                {"role": "user", "content": "u1"},
+                {"role": "assistant", "content": "a1"},
+            ],
+            "summary": "s1",
+        },
+    )
+
+    original_save = __import__("backend.src.slothbearflow_backend.memory.redis_memory", fromlist=["save_session_payload"]).save_session_payload
+
+    def capture_save(client, session_id, payload, ttl_sec=86400 * 7):
+        captured.append(ttl_sec)
+        return original_save(client, session_id, payload, ttl_sec=ttl_sec)
+
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.memory.redis_memory.save_session_payload",
+        capture_save,
+    )
+    get_settings.cache_clear()
+
+    payload, _client = get_redis_session("restore-ttl", settings=get_settings())
+    assert payload["summary"] == "s1"
+    assert captured and captured[-1] == 123
+
+
 def test_no_restore_when_switch_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("POSTGRES_RESTORE_ON_REDIS_MISS", "false")
     from backend.src.slothbearflow_backend.config import get_settings

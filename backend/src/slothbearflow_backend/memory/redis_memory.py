@@ -99,7 +99,12 @@ def get_redis_session(
         "messages": restored_messages,
         "summary": str(snapshot.get("summary") or ""),
     }
-    save_session_payload(client, session_id, payload, ttl_sec=86400 * 7)
+    save_session_payload(
+        client,
+        session_id,
+        payload,
+        ttl_sec=max(1, int(settings.postgres_restore_redis_ttl_sec)),
+    )
     logger.info(
         "会话已从 PostgreSQL 恢复: session_id=%s turns=%s",
         session_id,

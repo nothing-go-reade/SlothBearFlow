@@ -16,8 +16,7 @@ def build_tools(
     settings: Optional[Settings] = None,
 ) -> List[Any]:
     settings = settings or get_settings()
-    tools: List[Any] = [get_current_time, get_weather]
-    tools.append(build_get_session_context_tool(chat_history or []))
+    tools: List[Any] = [get_current_time, get_weather, build_get_session_context_tool(chat_history or [])]
     if settings.use_rag and not settings.skip_milvus and vector_store is not None:
         tools.append(build_search_knowledge_tool(vector_store))
     return tools

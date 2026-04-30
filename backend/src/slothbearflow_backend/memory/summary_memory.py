@@ -23,7 +23,6 @@ async def enqueue_summary_update(queue: asyncio.Queue, session_id: str) -> None:
 
 
 def run_summary_job(session_id: str, settings: Optional[Settings] = None) -> None:
-    """后台任务：压缩多轮对话为短摘要，写入 Redis（轻量占位实现）。"""
     settings = settings or get_settings()
     client = get_redis(settings)
     payload = load_session_payload(client, session_id)

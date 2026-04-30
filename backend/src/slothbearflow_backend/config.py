@@ -150,6 +150,10 @@ class Settings(BaseSettings):
         default=20,
         validation_alias="POSTGRES_RESTORE_TURN_LIMIT",
     )
+    postgres_restore_redis_ttl_sec: int = Field(
+        default=86400 * 7,
+        validation_alias="POSTGRES_RESTORE_REDIS_TTL_SEC",
+    )
 
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     log_dir: str = Field(default="logs", validation_alias="LOG_DIR")

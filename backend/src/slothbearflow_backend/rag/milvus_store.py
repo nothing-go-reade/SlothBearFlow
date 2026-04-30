@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Optional
-
+import threading
 from backend.src.slothbearflow_backend import Settings, get_settings
 from backend.src.slothbearflow_backend.rag.embedding import get_embedding_function
 
@@ -10,40 +10,56 @@ logger = logging.getLogger(__name__)
 
 _vector_store: Optional[Any] = None
 _vector_store_error: Optional[str] = None
+_lock = threading.Lock()
 
 
 def reset_vector_store_cache() -> None:
     global _vector_store, _vector_store_error
-    _vector_store = None
-    _vector_store_error = None
+    with _lock:
+        _vector_store = None
+        _vector_store_error = None
 
 
 def get_vector_store(settings: Optional[Settings] = None) -> Optional[Any]:
-    """懒加载 Milvus LangChain VectorStore；失败返回 None（主链路降级）。"""
     global _vector_store, _vector_store_error
+
     settings = settings or get_settings()
+
     if settings.skip_milvus or not settings.use_rag:
         return None
+
     if _vector_store is not None:
         return _vector_store
+
+    # 如果之前失败过，直接降级（可优化点）
     if _vector_store_error is not None:
         return None
-    try:
-        from langchain_milvus import Milvus
 
-        _vector_store = Milvus(
-            embedding_function=get_embedding_function(settings),
-            collection_name=settings.milvus_collection,
-            connection_args={"uri": settings.milvus_uri},
-            drop_old=False,
-            timeout=settings.milvus_timeout,
-        )
-        _vector_store_error = None
-        return _vector_store
-    except Exception as e:  # noqa: BLE001 — 模板需吞掉第三方连接错误
-        _vector_store_error = str(e)
-        logger.warning("Milvus 初始化失败，RAG 将降级关闭: %s", e)
-        return None
+    with _lock:
+        if _vector_store is not None:
+            return _vector_store
+
+        if _vector_store_error is not None:
+            return None
+
+        try:
+            from langchain_milvus import Milvus
+
+            _vector_store = Milvus(
+                embedding_function=get_embedding_function(settings),
+                collection_name=settings.milvus_collection,
+                connection_args={"uri": settings.milvus_uri},
+                drop_old=False,
+                timeout=settings.milvus_timeout,
+            )
+
+            _vector_store_error = None
+            return _vector_store
+
+        except Exception as e:
+            _vector_store_error = str(e)
+            logger.warning("Milvus 初始化失败，RAG 将降级关闭: %s", e)
+            return None
 
 
 def get_vector_store_status(settings: Optional[Settings] = None) -> Dict[str, Any]:

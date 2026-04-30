@@ -323,6 +323,10 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     )
 
     history_started_at = time.perf_counter()
+    # TODO 一 优化内容 提示词抽象出一个顶级接口类 统一会话提示词层
+    #  用于标准化 更标准做法是三层分离：系统基线策略（全局）→ 项目/团队策略（repo级）→ 用户会话策略（职责、偏好、目标 agent 形态）。
+    #  运行前先收集用户画像与目标，就是在构建第三层
+    #  首次会话引导问答 → 生成 session_policy 持久化 → 每轮在 system prompt 前部注入 ？ deer-flow思想 是否可以采用 claude code、cursor思想 ？
     history = messages_from_payload(list(payload.get("messages") or []))
     windowed = trim_message_window(history, settings.memory_window_pairs)
     logger.info(
@@ -334,6 +338,7 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
 
     vs_started_at = time.perf_counter()
     logger.info("chat vector store prepare start")
+    # TODO 二 优化内容 postgresql 元数据存储 +  redis会话加速存储 +  milvus向量存储 抽象出一个顶级接口类 统一存储层
     vs = get_vector_store(settings)
     logger.info(
         "chat vector store prepare done in %.3fs enabled=%s",
@@ -343,6 +348,12 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
 
     executor_started_at = time.perf_counter()
     logger.info("chat executor build start")
+    # TODO 三 优化内容
+    #       1 LLM 抽象一个顶级接口类 用于扩展方便  统一LLM模型层
+    #       2 ChatPromptTemplate 结构深度优化 完成顶级Prompt抽象接口
+    #           SystemPrompt是Agent最重要的关键，应该强制约束 ReAct管理、 Retrival RAG管理、Tools_CALL 工具调用管理 这些都应该符合顶级抽象接口，有自己的提示词规范约束
+    #           防止Token爆炸 合理利用ReAct 并且在进行过程是否可以展示 当前处于可观测的thinking、act、observe阶段
+    #       3 TOOL抽象顶级接口 便于拔插 支持配置化注册工具  支持调用开源的优秀工具
     executor = build_agent_executor(
         vector_store=vs,
         chat_history=windowed,
@@ -388,6 +399,7 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
                     )
                     + "\n\n"
                 )
+            # Query Loop Block Executor Next Result
             iterator = executor.stream(payload_input)
             while True:
                 chunk = await asyncio.to_thread(_next_stream_chunk, iterator)

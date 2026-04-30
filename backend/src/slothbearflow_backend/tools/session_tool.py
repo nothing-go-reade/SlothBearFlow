@@ -7,11 +7,9 @@ from langchain_core.tools import tool
 
 
 def build_get_session_context_tool(chat_history: List[BaseMessage]):
-    """把最近会话压成简短上下文，给 agent 一个稳定的自查工具。"""
 
     @tool
     def get_session_context() -> str:
-        """查看最近几轮对话的上下文摘要，适合回答追问、代词指代和延续任务。"""
         if not chat_history:
             return "当前会话中还没有历史上下文。"
 

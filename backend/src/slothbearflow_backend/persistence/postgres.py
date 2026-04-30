@@ -275,15 +275,16 @@ class PostgresPersistence:
         settings: Optional[Settings] = None,
     ) -> dict[str, Any]:
         settings = settings or get_settings()
-        if not self.ensure_schema(settings):
+
+        if not self.ensure_schema(settings) or turn_limit <= 0:
             return {"messages": [], "summary": ""}
-        if turn_limit <= 0:
-            return {"messages": [], "summary": ""}
+
         try:
             with self._get_connection(settings) as conn:
                 if conn is None:
                     return {"messages": [], "summary": ""}
                 with conn.cursor() as cur:
+                    cur.execute("BEGIN")
                     cur.execute(
                         """
                         SELECT summary
@@ -293,29 +294,28 @@ class PostgresPersistence:
                         (session_id,),
                     )
                     row = cur.fetchone()
-                    summary = str(row[0]) if row and row[0] is not None else ""
-
+                    summary = str(row[0]) if row and row[0] else ""
                     cur.execute(
                         """
                         SELECT user_message, assistant_message
-                        FROM agent_chat_turns
-                        WHERE session_id = %s
-                        ORDER BY created_at DESC, id DESC
-                        LIMIT %s
+                        FROM (
+                            SELECT user_message, assistant_message
+                            FROM agent_chat_turns
+                            WHERE session_id = %s
+                            ORDER BY id DESC
+                            LIMIT %s
+                        ) t
+                        ORDER BY id ASC
                         """,
                         (session_id, turn_limit),
                     )
                     rows = cur.fetchall() or []
-
-            rows = list(reversed(rows))
-            messages: list[dict[str, str]] = []
+            messages = []
             for user_message, assistant_message in rows:
                 messages.append({"role": "user", "content": str(user_message or "")})
-                messages.append(
-                    {"role": "assistant", "content": str(assistant_message or "")}
-                )
+                messages.append({"role": "assistant", "content": str(assistant_message or "")})
             return {"messages": messages, "summary": summary}
-        except Exception:
+        except Exception as e:
             logger.exception("PostgreSQL 读取 session 快照失败: session_id=%s", session_id)
             return {"messages": [], "summary": ""}
 

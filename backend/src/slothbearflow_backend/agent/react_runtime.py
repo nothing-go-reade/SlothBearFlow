@@ -131,7 +131,8 @@ class ExplicitReActRuntime:
                 )
 
         state.stop_reason = "max_steps"
-        return "I completed the reasoning steps but could not reach a stable final answer. Please provide more detail and I will continue.", state
+        return ("I completed the reasoning steps but could not reach a stable final answer. "
+                "Please provide more detail and I will continue."), state
 
     def invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
         output, state = self._run(payload)

@@ -40,11 +40,9 @@ def _set_rag_citations(citations: List[Tuple[str, str]]) -> None:
 
 
 def build_search_knowledge_tool(vector_store: Optional[Any]):
-    """闭包注入向量库；无库时返回降级提示。"""
-
+    # TODO 向量召回 ANN模糊匹配 + BP25精确召回 + Rerank重排序
     @tool
     def search_knowledge(query: str) -> str:
-        """从企业内部知识库检索与问题相关的片段（只读）。"""
         if vector_store is None:
             _set_rag_sources([])
             _set_rag_citations([])
@@ -65,5 +63,4 @@ def build_search_knowledge_tool(vector_store: Optional[Any]):
         _set_rag_citations(citations)
         header = "【检索片段】\n"
         return header + "\n\n---\n\n".join(parts) if parts else "（未检索到相关内容）"
-
     return search_knowledge
