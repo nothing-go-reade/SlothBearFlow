@@ -651,3 +651,53 @@ def test_chat_returns_rag_citations(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["tools_used"] == ["search_knowledge"]
     assert body["citations"][0]["source"] == "refund-policy.md"
     assert "财务审核" in body["citations"][0]["excerpt"]
+
+
+def test_chat_prefetches_rag_for_models_without_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from langchain_core.documents import Document
+
+    from backend.src.slothbearflow_backend.main import app
+
+    captured = {}
+
+    class FakeVectorStore:
+        def similarity_search(self, query, k=8):
+            return [
+                Document(
+                    page_content=(
+                        "SlothBearFlow 是一个本地优先的 AI Agent 服务脚手架，"
+                        "集成 FastAPI、React Umi、Redis、PostgreSQL、Milvus 和 Ollama。"
+                    ),
+                    metadata={"source": "docs/SlothBearFlow-项目知识库问答卡片.md"},
+                )
+            ]
+
+    class FakeExecutor:
+        def invoke(self, payload):
+            captured.update(payload)
+            return {"output": "SlothBearFlow 是一个本地优先的 AI Agent 服务脚手架。"}
+
+    monkeypatch.setattr("backend.src.slothbearflow_backend.main.get_vector_store", lambda settings=None: FakeVectorStore())
+    monkeypatch.setattr("backend.src.slothbearflow_backend.main.build_agent_executor", lambda **kwargs: FakeExecutor())
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_MODEL_SUPPORTS_TOOLS", "false")
+    monkeypatch.setenv("SKIP_MILVUS", "false")
+    monkeypatch.setenv("USE_RAG", "true")
+    monkeypatch.setenv("STRUCTURED_OUTPUT", "false")
+    monkeypatch.setenv("STREAM_OUTPUT", "false")
+
+    from backend.src.slothbearflow_backend.config import get_settings
+
+    get_settings.cache_clear()
+    with TestClient(app) as client:
+        r = client.post("/chat", json={"session_id": "rag-prefetch-1", "message": "SlothBearFlow 是什么？"})
+
+    assert r.status_code == 200
+    assert "【检索片段】" in captured["input"]
+    assert "SlothBearFlow 是一个本地优先的 AI Agent 服务脚手架" in captured["input"]
+    body = r.json()
+    assert body["source"] == "docs/SlothBearFlow-项目知识库问答卡片.md"
+    assert body["tools_used"] == ["search_knowledge"]
+    assert body["citations"][0]["source"] == "docs/SlothBearFlow-项目知识库问答卡片.md"

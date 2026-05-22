@@ -5,6 +5,7 @@ from langchain_core.tools import tool
 
 @tool
 def get_weather(city: str) -> str:
+    """Return offline sample weather information for a given Chinese city."""
     weather_data = {
         "北京": {"condition": "晴", "temperature_c": 23, "humidity": 35, "wind": "东南风 2 级"},
         "上海": {"condition": "多云转阴", "temperature_c": 18, "humidity": 68, "wind": "东北风 3 级"},

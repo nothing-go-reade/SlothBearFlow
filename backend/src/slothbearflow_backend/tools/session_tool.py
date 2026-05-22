@@ -10,6 +10,7 @@ def build_get_session_context_tool(chat_history: List[BaseMessage]):
 
     @tool
     def get_session_context() -> str:
+        """Return a compact summary of the latest messages in this chat session."""
         if not chat_history:
             return "当前会话中还没有历史上下文。"
 

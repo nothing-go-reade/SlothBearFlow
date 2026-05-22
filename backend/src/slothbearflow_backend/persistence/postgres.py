@@ -299,7 +299,7 @@ class PostgresPersistence:
                         """
                         SELECT user_message, assistant_message
                         FROM (
-                            SELECT user_message, assistant_message
+                            SELECT id, user_message, assistant_message
                             FROM agent_chat_turns
                             WHERE session_id = %s
                             ORDER BY id DESC
@@ -313,7 +313,9 @@ class PostgresPersistence:
             messages = []
             for user_message, assistant_message in rows:
                 messages.append({"role": "user", "content": str(user_message or "")})
-                messages.append({"role": "assistant", "content": str(assistant_message or "")})
+                messages.append(
+                    {"role": "assistant", "content": str(assistant_message or "")}
+                )
             return {"messages": messages, "summary": summary}
         except Exception as e:
             logger.exception("PostgreSQL 读取 session 快照失败: session_id=%s", session_id)

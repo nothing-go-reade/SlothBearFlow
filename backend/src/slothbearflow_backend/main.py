@@ -8,9 +8,10 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from uvicorn.logging import AccessFormatter
@@ -30,7 +31,13 @@ from backend.src.slothbearflow_backend.output_parser import structured_chat_outp
 from backend.src.slothbearflow_backend.output_schema import ChatOutput, Citation
 from backend.src.slothbearflow_backend.persistence.postgres import postgres_persistence
 from backend.src.slothbearflow_backend.rag.milvus_store import get_vector_store, get_vector_store_status
-from backend.src.slothbearflow_backend.tools.rag_tool import get_last_rag_citations, get_last_rag_sources, reset_rag_sources
+from backend.src.slothbearflow_backend.tools.rag_tool import (
+    RagRetrieval,
+    get_last_rag_citations,
+    get_last_rag_sources,
+    reset_rag_sources,
+    retrieve_knowledge_context,
+)
 from backend.src.slothbearflow_backend.worker.background import worker_loop
 
 
@@ -49,10 +56,6 @@ def _configure_logging() -> None:
     access_formatter = AccessFormatter(
         '%(asctime)s | %(levelname)s | %(name)s | %(client_addr)s - "%(request_line)s" %(status_code)s'
     )
-    access_file_formatter = logging.Formatter(
-        '%(asctime)s | %(levelname)s | %(name)s | %(client_addr)s - "%(request_line)s" %(status_code)s'
-    )
-
     def ensure_file_handler(
         target_logger: logging.Logger,
         file_path: str,
@@ -113,7 +116,7 @@ def _configure_logging() -> None:
         uvicorn_access_logger,
         access_log_path,
         level=log_level,
-        formatter=access_file_formatter,
+        formatter=access_formatter,
     )
 
 
@@ -138,6 +141,13 @@ async def lifespan(app: FastAPI):
     logger.info("后台 worker 已停止")
 
 app = FastAPI(title="LangChain Prod Agent", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class ChatRequest(BaseModel):
@@ -170,6 +180,36 @@ def _detect_used_tools(raw_output: str, has_citations: bool) -> list[str]:
     if has_citations:
         tools.append("search_knowledge")
     return tools
+
+
+def _build_rag_augmented_input(user_message: str, retrieval: Optional[RagRetrieval]) -> str:
+    if not retrieval or not retrieval.context:
+        return user_message
+    return (
+        "请优先根据下面的知识库检索片段回答用户问题。"
+        "如果片段与问题无关，请明确说明没有找到可靠依据；"
+        "如果片段中包含答案，请引用来源文件并给出直接结论。"
+        "回答控制在 6 句话以内，避免复述无关片段。\n\n"
+        f"{retrieval.context}\n\n"
+        f"【用户问题】\n{user_message}"
+    )
+
+
+def _merge_citations(*groups: List[Citation]) -> List[Citation]:
+    seen: set[tuple[str, str]] = set()
+    merged: List[Citation] = []
+    for group in groups:
+        for item in group:
+            key = (item.source, item.excerpt)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return merged
+
+
+def _citation_sources(citations: List[Citation]) -> List[str]:
+    return [item.source for item in citations if item.source]
 
 
 def _should_stream_response(settings: Any, executor: Any) -> tuple[bool, str]:
@@ -346,6 +386,30 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         vs is not None,
     )
 
+    rag_prefetch_started_at = time.perf_counter()
+    rag_retrieval: Optional[RagRetrieval] = None
+    if vs is not None:
+        try:
+            rag_retrieval = await asyncio.to_thread(
+                retrieve_knowledge_context,
+                vs,
+                req.message,
+                k=24,
+            )
+        except Exception:
+            logger.exception("chat rag prefetch failed")
+            rag_retrieval = None
+    prefetched_rag_citations = [
+        Citation(**item) for item in (rag_retrieval.citations if rag_retrieval else [])
+    ]
+    llm_input = _build_rag_augmented_input(req.message, rag_retrieval)
+    logger.info(
+        "chat rag prefetch done in %.3fs sources=%s context_chars=%s",
+        time.perf_counter() - rag_prefetch_started_at,
+        rag_retrieval.sources if rag_retrieval else [],
+        len(rag_retrieval.context if rag_retrieval else ""),
+    )
+
     executor_started_at = time.perf_counter()
     logger.info("chat executor build start")
     # TODO 三 优化内容
@@ -379,7 +443,7 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
 
         async def event_stream():
             stream_started_at = time.perf_counter()
-            payload_input = {"input": req.message, "chat_history": windowed}
+            payload_input = {"input": llm_input, "chat_history": windowed}
             full_output_parts: list[str] = []
             persisted_stream_events: list[dict[str, Any]] = []
             if stream_format == "sse":
@@ -435,7 +499,18 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
                     yield text
 
             answer = "".join(full_output_parts)
-            stream_tools_used = _detect_used_tools(answer, False)
+            tool_rag_citations = [
+                Citation(**item) for item in get_last_rag_citations()
+            ]
+            stream_rag_citations = _merge_citations(
+                prefetched_rag_citations,
+                tool_rag_citations,
+            )
+            stream_rag_sources = sorted(
+                set(_citation_sources(stream_rag_citations) + get_last_rag_sources())
+            )
+            stream_rag_hint = ",".join(stream_rag_sources)
+            stream_tools_used = _detect_used_tools(answer, bool(stream_rag_citations))
             append_turn_and_save(
                 client,
                 req.session_id,
@@ -448,9 +523,9 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
                 user_message=req.message,
                 assistant_message=answer,
                 raw_output=answer,
-                response_source="agent",
+                response_source=stream_rag_hint or "agent",
                 tools_used=stream_tools_used,
-                citations=[],
+                citations=[item.model_dump() for item in stream_rag_citations],
                 response_mode="stream",
                 stream_format=stream_format,
                 settings=settings,
@@ -460,8 +535,10 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
                     "type": "done",
                     "session_id": req.session_id,
                     "answer": answer,
-                    "source": "agent",
-                    "citations": [],
+                    "source": stream_rag_hint or "agent",
+                    "citations": [
+                        item.model_dump() for item in stream_rag_citations
+                    ],
                     "tools_used": stream_tools_used,
                 }
                 persisted_stream_events.append(
@@ -499,7 +576,7 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         logger.info("chat agent invoke start")
         result = await asyncio.to_thread(
             executor.invoke,
-            {"input": req.message, "chat_history": windowed},
+            {"input": llm_input, "chat_history": windowed},
         )
         logger.info(
             "chat agent invoke done in %.3fs result_keys=%s",
@@ -512,8 +589,11 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
 
     postprocess_started_at = time.perf_counter()
     raw = str(result.get("output") or "")
-    rag_sources = get_last_rag_sources()
-    rag_citations = [Citation(**item) for item in get_last_rag_citations()]
+    rag_citations = _merge_citations(
+        prefetched_rag_citations,
+        [Citation(**item) for item in get_last_rag_citations()],
+    )
+    rag_sources = sorted(set(_citation_sources(rag_citations) + get_last_rag_sources()))
     rag_hint = ",".join(sorted(set(rag_sources))) if rag_sources else ""
     tools_used = _detect_used_tools(raw, bool(rag_citations))
     logger.info(

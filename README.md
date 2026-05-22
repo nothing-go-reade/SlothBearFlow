@@ -116,4 +116,12 @@ See `backend/.env.example` for full options.
 
 ## Frontend
 
-`frontend/` is intentionally empty for now and reserved for future frontend implementation.
+`frontend/` is a React + Umi + TypeScript console for calling the backend API.
+
+```bash
+cd frontend
+pnpm install
+pnpm dev
+```
+
+Then open `http://127.0.0.1:5173`. The local console calls the FastAPI backend directly at `http://127.0.0.1:8000` so Server-Sent Events can stream reliably in development.
