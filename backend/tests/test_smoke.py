@@ -701,3 +701,59 @@ def test_chat_prefetches_rag_for_models_without_tools(
     assert body["source"] == "docs/SlothBearFlow-项目知识库问答卡片.md"
     assert body["tools_used"] == ["search_knowledge"]
     assert body["citations"][0]["source"] == "docs/SlothBearFlow-项目知识库问答卡片.md"
+
+
+def test_bm25_rank_prefers_exact_keyword_match() -> None:
+    from langchain_core.documents import Document
+
+    from backend.src.slothbearflow_backend.rag.milvus_store import _bm25_rank
+
+    docs = [
+        Document(
+            page_content="项目介绍：SlothBearFlow 是本地 Agent 工作台。",
+            metadata={"source": "overview.md"},
+        ),
+        Document(
+            page_content="PostgreSQL 负责会话、对话轮次、流式事件和知识库任务元数据持久化。",
+            metadata={"source": "postgres.md"},
+        ),
+    ]
+
+    ranked = _bm25_rank("PostgreSQL 元数据 持久化", docs)
+
+    assert ranked[0].metadata["source"] == "postgres.md"
+    assert ranked[0].metadata["retrieval"] == "bm25"
+    assert ranked[0].metadata["bm25_score"] > 0
+
+
+def test_retrieve_knowledge_context_merges_keyword_hits() -> None:
+    from langchain_core.documents import Document
+
+    from backend.src.slothbearflow_backend.tools.rag_tool import retrieve_knowledge_context
+
+    class FakeVectorStore:
+        def similarity_search(self, query, k=24):
+            return [
+                Document(
+                    page_content="SlothBearFlow 是本地 Agent 服务脚手架。",
+                    metadata={"source": "overview.md"},
+                )
+            ]
+
+        def keyword_search(self, query, k=8):
+            return [
+                Document(
+                    page_content="PostgreSQL 是元数据引擎，负责持久化会话和 ingest 任务。",
+                    metadata={"source": "postgres.md", "retrieval": "bm25"},
+                )
+            ]
+
+    retrieval = retrieve_knowledge_context(
+        FakeVectorStore(),
+        "PostgreSQL 元数据引擎负责什么？",
+        max_context=2,
+    )
+
+    assert retrieval.citations[0]["source"] == "postgres.md"
+    assert "PostgreSQL 是元数据引擎" in retrieval.context
+    assert "overview.md" in retrieval.sources

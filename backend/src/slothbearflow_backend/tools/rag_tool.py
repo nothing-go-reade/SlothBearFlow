@@ -92,6 +92,28 @@ def _rank_docs(query: str, docs: List[Any]) -> List[Any]:
     return [doc for _, doc in ranked]
 
 
+def _dedupe_docs(docs: List[Any]) -> List[Any]:
+    seen: set[Tuple[str, str]] = set()
+    deduped: List[Any] = []
+    for doc in docs:
+        key = (_doc_source(doc), _doc_excerpt(doc, max_chars=1200))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(doc)
+    return deduped
+
+
+def _keyword_search(vector_store: Any, query: str, k: int) -> List[Any]:
+    search = getattr(vector_store, "keyword_search", None)
+    if not callable(search):
+        return []
+    try:
+        return list(search(query, k=k))
+    except TypeError:
+        return list(search(query))
+
+
 def retrieve_knowledge_context(
     vector_store: Optional[Any],
     query: str,
@@ -102,7 +124,9 @@ def retrieve_knowledge_context(
     if vector_store is None:
         return RagRetrieval(context="", sources=[], citations=[])
 
-    docs = vector_store.similarity_search(query, k=k)
+    vector_docs = vector_store.similarity_search(query, k=k)
+    keyword_docs = _keyword_search(vector_store, query, k=max_context * 2)
+    docs = _dedupe_docs(keyword_docs + vector_docs)
     docs = _rank_docs(query, docs)
     sources: List[str] = []
     citations: List[Dict[str, str]] = []
@@ -126,7 +150,7 @@ def retrieve_knowledge_context(
 
 
 def build_search_knowledge_tool(vector_store: Optional[Any]):
-    # TODO 向量召回 ANN模糊匹配 + BP25精确召回 + Rerank重排序
+    # TODO 向量召回 ANN模糊匹配 + BM25 精确召回 + Rerank 重排序
     @tool
     def search_knowledge(query: str) -> str:
         """Search the configured knowledge base for information related to the query."""

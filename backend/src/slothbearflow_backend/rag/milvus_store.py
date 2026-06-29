@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import logging
+import math
+import re
 import threading
 import uuid
+from collections import Counter
 from typing import Any, Dict, List, Optional
 
 from langchain_core.documents import Document
@@ -15,6 +18,63 @@ logger = logging.getLogger(__name__)
 _vector_store: Optional[Any] = None
 _vector_store_error: Optional[str] = None
 _lock = threading.Lock()
+
+
+def _tokenize_for_bm25(text: str) -> List[str]:
+    text = str(text or "").lower()
+    ascii_terms = re.findall(r"[a-z0-9_./:-]{2,}", text)
+    cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
+    cjk_bigrams = [
+        "".join(cjk_chars[idx : idx + 2])
+        for idx in range(max(0, len(cjk_chars) - 1))
+    ]
+    return ascii_terms + cjk_chars + cjk_bigrams
+
+
+def _bm25_rank(query: str, documents: List[Document]) -> List[Document]:
+    query_terms = _tokenize_for_bm25(query)
+    if not query_terms or not documents:
+        return []
+
+    tokenized_docs = [_tokenize_for_bm25(doc.page_content) for doc in documents]
+    lengths = [len(tokens) for tokens in tokenized_docs]
+    avg_len = sum(lengths) / len(lengths) if lengths else 0.0
+    if avg_len <= 0:
+        return []
+
+    doc_freq: Counter[str] = Counter()
+    for tokens in tokenized_docs:
+        doc_freq.update(set(tokens))
+
+    total_docs = len(documents)
+    k1 = 1.5
+    b = 0.75
+    scored: List[tuple[float, int, Document]] = []
+    for idx, (doc, tokens, doc_len) in enumerate(
+        zip(documents, tokenized_docs, lengths)
+    ):
+        term_freq = Counter(tokens)
+        score = 0.0
+        for term in query_terms:
+            freq = term_freq.get(term, 0)
+            if freq <= 0:
+                continue
+            idf = math.log(
+                1 + (total_docs - doc_freq[term] + 0.5) / (doc_freq[term] + 0.5)
+            )
+            denominator = freq + k1 * (1 - b + b * doc_len / avg_len)
+            score += idf * (freq * (k1 + 1)) / denominator
+        if score <= 0:
+            continue
+        metadata = dict(getattr(doc, "metadata", None) or {})
+        metadata["bm25_score"] = round(score, 6)
+        metadata["retrieval"] = "bm25"
+        scored.append(
+            (score, -idx, Document(page_content=doc.page_content, metadata=metadata))
+        )
+
+    scored.sort(reverse=True)
+    return [doc for _, _, doc in scored]
 
 
 class SimpleMilvusVectorStore:
@@ -118,6 +178,38 @@ class SimpleMilvusVectorStore:
                 Document(page_content=str(entity.get("text") or ""), metadata=metadata)
             )
         return docs
+
+    def keyword_search(
+        self,
+        query: str,
+        *,
+        k: int = 8,
+        candidate_limit: int = 512,
+    ) -> List[Document]:
+        if not self.client.has_collection(self.collection_name, timeout=self.timeout):
+            return []
+        try:
+            rows = self.client.query(
+                collection_name=self.collection_name,
+                filter='id != ""',
+                output_fields=["text", "source", "metadata"],
+                limit=max(k, candidate_limit),
+                timeout=self.timeout,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Milvus BM25 候选读取失败: %s", exc)
+            return []
+
+        docs: List[Document] = []
+        for row in rows:
+            metadata = dict(row.get("metadata") or {})
+            metadata["source"] = str(
+                row.get("source") or metadata.get("source") or "unknown"
+            )
+            docs.append(
+                Document(page_content=str(row.get("text") or ""), metadata=metadata)
+            )
+        return _bm25_rank(query, docs)[:k]
 
 
 def reset_vector_store_cache() -> None:
