@@ -105,6 +105,10 @@ Main flags (via `.env`):
 - `REVIEW_TOOL_TRACE=false|true`
 - `INJECT_LEARNING_INTO_PROMPT=false|true`
 - `LEARNING_PROMPT_BUDGET_CHARS=1200`
+- `TOOL_GUARD_MODE=enforce|log|off` (function-calling security; default enforce)
+- `TOOL_POLICY_FILE=backend/config/tool_policy.yaml`
+- `MAX_TOOL_CALLS_PER_TURN=8`
+- `TOOL_SCRUB_OUTPUT=true|false`
 
 ReAct runtime notes:
 - With `ENABLE_EXPLICIT_REACT_RUNTIME=false` (default), `/chat` keeps current LangChain AgentExecutor behavior.
@@ -140,6 +144,36 @@ turns and can reduce provider prefix-cache hits; the injected block deliberately
 omits volatile fields to stay byte-stable when the learning set is unchanged.
 
 See `backend/.env.example` for full options.
+
+## Tool Guard (function-calling security)
+
+Config-file-driven security layer for tool/function calling, aligned with
+**OWASP LLM Top 10 2025 · LLM08 Excessive Agency**. Enforced uniformly across
+both executor paths (LangChain `AgentExecutor` and `ExplicitReActRuntime`) via a
+`BaseTool` wrapper — both paths converge on `BaseTool._run`, so wrapping there
+covers each while keeping the tool's function-calling schema byte-identical.
+
+Policy lives in `backend/config/tool_policy.yaml` (loaded once at startup; if the
+file is missing/unparseable the code falls back to a built-in default that allows
+the current read-only tools and denies unknown ones). Per tool you can declare:
+`allow`, `class: read|write`, `requires_approval`, `max_calls_per_turn`, and
+per-argument constraints (`type`/`max_len`/`enum`/`regex`/`min`/`max`/`path_within`).
+A global `default_action: deny` blocks any tool not in the allowlist.
+
+Coverage (OWASP LLM08 mitigations):
+- **Allowlist / least privilege** — disallowed tools are filtered before the model sees them.
+- **Untrusted-argument validation** — LLM-supplied args are validated against the policy (allowlist-style).
+- **Per-turn quota** — global + per-tool call caps (via `contextvars`, isolated per request).
+- **Dangerous-action gate** — `requires_approval` tools are auto-denied in this headless service.
+- **Output scrubbing** — tool observations are redacted for secrets/keys before returning to the model.
+
+Modes: `enforce` (default; filter + block), `log` (observe & log violations,
+don't block — safe rollout), `off` (pure passthrough, zero behavior change).
+Defaults are chosen so the current four read-only tools behave exactly as before.
+The background review's own tool whitelist is preserved and takes precedence over
+the policy file.
+
+See `backend/config/tool_policy.yaml` and `backend/.env.example` for full options.
 
 ## Testing
 

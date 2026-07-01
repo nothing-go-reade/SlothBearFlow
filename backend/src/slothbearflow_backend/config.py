@@ -190,6 +190,22 @@ class Settings(BaseSettings):
         default=1200, validation_alias="LEARNING_PROMPT_BUDGET_CHARS"
     )
 
+    # 工具调用安全加固层（Tool Guard，对标 OWASP LLM08 Excessive Agency）
+    # 安全默认：enforce 启动即生效；随仓库策略放行现有只读工具、拒绝未知工具。
+    tool_guard_mode: str = Field(
+        default="enforce", validation_alias="TOOL_GUARD_MODE"
+    )  # off | log | enforce
+    tool_policy_file: str = Field(
+        default="backend/config/tool_policy.yaml",
+        validation_alias="TOOL_POLICY_FILE",
+    )
+    max_tool_calls_per_turn: int = Field(
+        default=8, validation_alias="MAX_TOOL_CALLS_PER_TURN"
+    )
+    tool_scrub_output: bool = Field(
+        default=True, validation_alias="TOOL_SCRUB_OUTPUT"
+    )
+
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     log_dir: str = Field(default="logs", validation_alias="LOG_DIR")
     app_log_file: str = Field(default="backend.src.slothbearflow_backend.log", validation_alias="APP_LOG_FILE")

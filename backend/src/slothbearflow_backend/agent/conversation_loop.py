@@ -22,6 +22,7 @@ from backend.src.slothbearflow_backend.memory.short_memory import trim_message_w
 from backend.src.slothbearflow_backend.memory.summary_memory import enqueue_summary_update
 from backend.src.slothbearflow_backend.output_schema import ChatOutput, Citation
 from backend.src.slothbearflow_backend.persistence.postgres import postgres_persistence
+from backend.src.slothbearflow_backend.security.turn_state import begin_turn, end_turn
 from backend.src.slothbearflow_backend.tools.rag_tool import (
     RagRetrieval,
     reset_rag_sources,
@@ -170,6 +171,7 @@ class ChatTurnRunner:
         )
 
         reset_rag_sources()
+        begin_turn()  # 开启本回合工具调用配额计数（tool guard）
 
         payload, client = get_redis_session(turn.session_id, settings=settings)
         logger.info(
@@ -449,6 +451,7 @@ class ChatTurnRunner:
             tools_used=tools_used,
             citations=citations,
         )
+        end_turn()  # 回合收尾：清空本回合工具调用配额计数（tool guard）
 
     def _build_learning_context(self, query: str) -> Optional[str]:
         """读回：把历史复盘沉淀的相关 memory/skills 注入 system prompt（有界、可关）。"""

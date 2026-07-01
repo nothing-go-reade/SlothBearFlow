@@ -120,6 +120,19 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     settings = get_settings()
     postgres_persistence.ensure_schema(settings)
+    # 初始化即建立工具白名单（tool guard，对标「初始化时建立白名单」）。
+    try:
+        from backend.src.slothbearflow_backend.security import get_tool_policy
+
+        _tool_policy = get_tool_policy(settings)
+        logger.info(
+            "tool guard: mode=%s default_action=%s allow=%s",
+            settings.tool_guard_mode,
+            _tool_policy.default_action,
+            _tool_policy.allowed_tool_names(),
+        )
+    except Exception:
+        logger.exception("工具策略预热失败（不阻断启动）")
     queue: asyncio.Queue = asyncio.Queue(maxsize=settings.job_queue_max)
     app.state.job_queue = queue
     app.state.worker_task = asyncio.create_task(worker_loop(queue, settings))

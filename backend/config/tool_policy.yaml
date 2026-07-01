@@ -1,0 +1,48 @@
+# SlothBearFlow 工具调用安全策略（Tool Guard）
+# 对标 OWASP LLM Top 10 2025 · LLM08 Excessive Agency：最小权限 + allowlist。
+# 由 security/loader.py 在初始化时加载；缺失/解析失败会回退到代码内置默认策略。
+# 修改后需重启服务（策略经 lru_cache 缓存）。
+
+version: 1
+default_action: deny              # 未列入下方 tools 的工具一律拒绝（安全默认）
+max_tool_calls_per_turn: 8         # 单个对话回合的工具调用总上限
+
+tools:
+  # —— 当前 4 个只读工具，全部放行（对现有行为零变更）——
+  get_current_time:
+    allow: true
+    class: read
+
+  get_session_context:
+    allow: true
+    class: read
+
+  get_weather:
+    allow: true
+    class: read
+    max_calls_per_turn: 3
+    args:
+      city:
+        type: string
+        max_len: 20               # 防资源耗尽 / 超长注入
+
+  search_knowledge:
+    allow: true
+    class: read
+    max_calls_per_turn: 4
+    args:
+      query:
+        type: string
+        max_len: 256
+
+  # —— 示例：将来若接入写操作 / 外部副作用工具，遵循下述范式 ——
+  # 写类工具默认应带 requires_approval，headless 服务下等于「自动拒绝」，
+  # 需人工在此显式放行（或改造成带审批通道）后方可调用。
+  #  delete_file:
+  #    allow: true
+  #    class: write
+  #    requires_approval: true
+  #    args:
+  #      path:
+  #        type: string
+  #        path_within: ./workspace   # 仅允许该目录内，防路径穿越
