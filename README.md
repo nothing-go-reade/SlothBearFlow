@@ -95,10 +95,49 @@ Main flags (via `.env`):
 - `REACT_MAX_STEPS=4`
 - `REACT_TOOL_TIMEOUT_SEC=15`
 - `REACT_STREAM_THOUGHTS=false|true`
+- `ENABLE_BACKGROUND_REVIEW=false|true`
+- `REVIEW_MEMORY_INTERVAL=3`
+- `REVIEW_SKILLS_INTERVAL=5`
+- `REVIEW_BASE_DIR=agent_learning`
+- `REVIEW_MAX_ITEMS=5`
+- `REVIEW_MODEL=` (empty → reuse main LLM)
+- `REVIEW_FORCE_STRUCTURED=false|true`
+- `REVIEW_TOOL_TRACE=false|true`
+- `INJECT_LEARNING_INTO_PROMPT=false|true`
+- `LEARNING_PROMPT_BUDGET_CHARS=1200`
 
 ReAct runtime notes:
 - With `ENABLE_EXPLICIT_REACT_RUNTIME=false` (default), `/chat` keeps current LangChain AgentExecutor behavior.
 - With `ENABLE_EXPLICIT_REACT_RUNTIME=true`, `/chat` uses an explicit bounded ReAct loop while keeping response schema unchanged.
+
+## Background Review (Memory / Skills self-learning)
+
+Hermes-style background reflection. After the main answer is delivered, the
+turn orchestration layer (`agent/conversation_loop.py`, `ChatTurnRunner`) may
+enqueue a `"review"` job on the existing async worker. A restricted review
+agent then replays a snapshot of the turn and distills:
+
+- **Memory** — durable user preferences / identity / how-they-want-the-agent-to-work
+- **Skills** — reusable task techniques (user corrections to format/tone/workflow are a first-class skill signal)
+
+Storage: Markdown files are the **source of truth** (`agent_learning/memory/*.md`,
+`agent_learning/skills/*.md`); a derived `index.sqlite` provides dedup + relevance
+selection and can be fully rebuilt from disk. With `ENABLE_BACKGROUND_REVIEW=true`,
+review runs every `REVIEW_MEMORY_INTERVAL` / `REVIEW_SKILLS_INTERVAL` turns (nudge cadence).
+
+Write path is auto-selected by model capability:
+- tool-capable models → Hermes-style `save_memory` / `save_skill` tool calls gated by a thread-local whitelist (only those tools execute);
+- otherwise (e.g. `deepseek-r1:7b`) → structured-output JSON written by backend code.
+
+Isolation guarantees: the review never writes the Redis session, never appends to
+conversation history, and only writes through the learning store — so the main
+session and its history stay clean.
+
+Read-back (closing the loop) is opt-in via `INJECT_LEARNING_INTO_PROMPT=true`:
+relevant memory/skills are injected (bounded by `LEARNING_PROMPT_BUDGET_CHARS`)
+into the next turn's system prompt. Note this changes the system prompt across
+turns and can reduce provider prefix-cache hits; the injected block deliberately
+omits volatile fields to stay byte-stable when the learning set is unchanged.
 
 See `backend/.env.example` for full options.
 

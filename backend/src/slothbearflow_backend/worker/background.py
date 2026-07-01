@@ -5,6 +5,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from backend.src.slothbearflow_backend import Settings, get_settings
+from backend.src.slothbearflow_backend.learning.review_agent import run_review_job
 from backend.src.slothbearflow_backend.memory.summary_memory import run_summary_job
 from backend.src.slothbearflow_backend.persistence.postgres import postgres_persistence
 from backend.src.slothbearflow_backend.rag.ingest import ingest_plain_text
@@ -56,6 +57,9 @@ async def worker_loop(queue: asyncio.Queue, settings: Optional[Settings] = None)
                 if not sid:
                     continue
                 await asyncio.to_thread(run_summary_job, sid, settings)
+            elif job_type == "review":
+                snapshot = job.get("snapshot") or {}
+                await asyncio.to_thread(run_review_job, snapshot, settings)
             else:
                 logger.warning("未知任务类型: %s", job_type)
         except Exception:

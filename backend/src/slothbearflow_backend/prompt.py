@@ -13,10 +13,17 @@ def build_system_prompt(
     rolling_summary: Optional[str] = None,
     supports_tools: bool = True,
     structured_output: bool = False,
+    learning_context: Optional[str] = None,
 ) -> str:
     summary_block = (
         f"\n\n【历史会话摘要】\n{rolling_summary.strip()}\n"
         if rolling_summary and rolling_summary.strip()
+        else ""
+    )
+
+    learning_block = (
+        f"\n\n【长期记忆与技巧（来自历史复盘，按需参考）】\n{learning_context.strip()}\n"
+        if learning_context and learning_context.strip()
         else ""
     )
 
@@ -53,7 +60,7 @@ def build_system_prompt(
 {output_rule}
 
 历史摘要（用于保持长期上下文）：
-{summary_block}
+{summary_block}{learning_block}
 
 请开始思考和行动。"""
     return system
@@ -63,6 +70,7 @@ def get_agent_prompt(
     *,
     rolling_summary: Optional[str] = None,
     structured_output: bool = False,
+    learning_context: Optional[str] = None,
 ) -> ChatPromptTemplate:
     """企业级 Agent 系统提示词（v1 完整版）
 
@@ -78,6 +86,7 @@ def get_agent_prompt(
                     rolling_summary=rolling_summary,
                     supports_tools=True,
                     structured_output=structured_output,
+                    learning_context=learning_context,
                 )
             ),
             MessagesPlaceholder(variable_name="chat_history", optional=True),
@@ -91,6 +100,7 @@ def get_basic_chat_prompt(
     *,
     rolling_summary: Optional[str] = None,
     structured_output: bool = False,
+    learning_context: Optional[str] = None,
 ) -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
@@ -99,6 +109,7 @@ def get_basic_chat_prompt(
                     rolling_summary=rolling_summary,
                     supports_tools=False,
                     structured_output=structured_output,
+                    learning_context=learning_context,
                 )
             ),
             MessagesPlaceholder(variable_name="chat_history", optional=True),

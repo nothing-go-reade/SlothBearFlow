@@ -27,6 +27,7 @@ class ReActRuntimeState:
     steps: int = 0
     stop_reason: str = ""
     tools_used: list[str] = field(default_factory=list)
+    tool_trace: list = field(default_factory=list)
 
 
 class ExplicitReActRuntime:
@@ -68,6 +69,19 @@ class ExplicitReActRuntime:
         )
 
     def _invoke_tool(self, call: ToolCallRecord) -> ToolResultRecord:
+        # 线程级白名单（仅后台复盘会设置）：放行名单外的工具直接 deny。
+        from backend.src.slothbearflow_backend.learning.review_guard import (
+            deny_message,
+            is_tool_allowed,
+        )
+
+        if not is_tool_allowed(call.name):
+            return ToolResultRecord(
+                call_id=call.call_id,
+                name=call.name,
+                ok=False,
+                content=deny_message(call.name),
+            )
         tool = self._tool_map.get(call.name)
         if tool is None:
             return ToolResultRecord(
@@ -118,6 +132,14 @@ class ExplicitReActRuntime:
                 result = self._invoke_tool(call)
                 if call.name and call.name not in state.tools_used:
                     state.tools_used.append(call.name)
+                state.tool_trace.append(
+                    {
+                        "name": result.name,
+                        "args": call.args,
+                        "ok": result.ok,
+                        "observation": result.content,
+                    }
+                )
                 observation = {
                     "ok": result.ok,
                     "tool": result.name,
@@ -141,6 +163,7 @@ class ExplicitReActRuntime:
             "stop_reason": state.stop_reason,
             "steps": state.steps,
             "tools_used": state.tools_used,
+            "tool_trace": state.tool_trace,
         }
 
     def stream(self, payload: dict[str, Any]):

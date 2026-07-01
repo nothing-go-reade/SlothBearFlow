@@ -44,6 +44,7 @@ def build_agent_executor(
     chat_history: Optional[list[Any]] = None,
     rolling_summary: Optional[str] = None,
     settings: Optional[Settings] = None,
+    learning_context: Optional[str] = None,
 ) -> Any:
     settings = settings or get_settings()
     llm = get_chat_llm(settings)
@@ -53,6 +54,7 @@ def build_agent_executor(
         prompt = get_basic_chat_prompt(
             rolling_summary=rolling_summary,
             structured_output=settings.structured_output,
+            learning_context=learning_context,
         )
         return BasicChatExecutor(prompt | llm)
 
@@ -65,6 +67,7 @@ def build_agent_executor(
             rolling_summary=rolling_summary,
             supports_tools=True,
             structured_output=settings.structured_output,
+            learning_context=learning_context,
         )
 
         class ReActExecutorAdapter(ExplicitReActRuntime):
@@ -101,6 +104,7 @@ def build_agent_executor(
     prompt = get_agent_prompt(
         rolling_summary=rolling_summary,
         structured_output=settings.structured_output,
+        learning_context=learning_context,
     )
     agent = create_tool_calling_agent(llm, tools, prompt)
     return AgentExecutor(

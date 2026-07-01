@@ -162,6 +162,34 @@ class Settings(BaseSettings):
         validation_alias="POSTGRES_RESTORE_REDIS_TTL_SEC",
     )
 
+    # 后台复盘学习层（Hermes Background Review 范式，默认全关，opt-in）
+    enable_background_review: bool = Field(
+        default=False, validation_alias="ENABLE_BACKGROUND_REVIEW"
+    )
+    review_memory_interval: int = Field(
+        default=3, validation_alias="REVIEW_MEMORY_INTERVAL"
+    )
+    review_skills_interval: int = Field(
+        default=5, validation_alias="REVIEW_SKILLS_INTERVAL"
+    )
+    review_base_dir: str = Field(
+        default="agent_learning", validation_alias="REVIEW_BASE_DIR"
+    )
+    review_max_items: int = Field(default=5, validation_alias="REVIEW_MAX_ITEMS")
+    review_model: str = Field(default="", validation_alias="REVIEW_MODEL")
+    review_force_structured: bool = Field(
+        default=False, validation_alias="REVIEW_FORCE_STRUCTURED"
+    )
+    review_tool_trace: bool = Field(
+        default=False, validation_alias="REVIEW_TOOL_TRACE"
+    )
+    inject_learning_into_prompt: bool = Field(
+        default=False, validation_alias="INJECT_LEARNING_INTO_PROMPT"
+    )
+    learning_prompt_budget_chars: int = Field(
+        default=1200, validation_alias="LEARNING_PROMPT_BUDGET_CHARS"
+    )
+
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     log_dir: str = Field(default="logs", validation_alias="LOG_DIR")
     app_log_file: str = Field(default="backend.src.slothbearflow_backend.log", validation_alias="APP_LOG_FILE")

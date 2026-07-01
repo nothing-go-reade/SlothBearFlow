@@ -13,6 +13,7 @@ backend/.env.local
 backend/.env.private
 *.log
 logs/
+agent_learning/
 .idea/
 .claude/
 AGENTS.md

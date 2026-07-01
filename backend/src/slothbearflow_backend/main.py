@@ -17,26 +17,18 @@ from pydantic import BaseModel, Field
 from uvicorn.logging import AccessFormatter
 
 from backend.src.slothbearflow_backend import build_agent_executor, get_settings
+from backend.src.slothbearflow_backend.agent.conversation_loop import ChatTurnRunner, TurnInput
 from backend.src.slothbearflow_backend.llm import get_llm_model_name
 from backend.src.slothbearflow_backend.rag.embedding import get_embedding_model_name, get_embedding_provider
 from backend.src.slothbearflow_backend.deps import InMemoryRedis, ping_redis
-from backend.src.slothbearflow_backend.memory.redis_memory import (
-    append_turn_and_save,
-    get_redis_session,
-    messages_from_payload,
-)
-from backend.src.slothbearflow_backend.memory.short_memory import trim_message_window
-from backend.src.slothbearflow_backend.memory.summary_memory import enqueue_summary_update
+from backend.src.slothbearflow_backend.memory.redis_memory import get_redis_session
 from backend.src.slothbearflow_backend.output_parser import structured_chat_output_from_text
 from backend.src.slothbearflow_backend.output_schema import ChatOutput, Citation
 from backend.src.slothbearflow_backend.persistence.postgres import postgres_persistence
 from backend.src.slothbearflow_backend.rag.milvus_store import get_vector_store, get_vector_store_status
 from backend.src.slothbearflow_backend.tools.rag_tool import (
-    RagRetrieval,
     get_last_rag_citations,
     get_last_rag_sources,
-    reset_rag_sources,
-    retrieve_knowledge_context,
 )
 from backend.src.slothbearflow_backend.worker.background import worker_loop
 
@@ -170,70 +162,6 @@ class IngestResponse(BaseModel):
     job_id: str
 
 
-def _detect_used_tools(raw_output: str, has_citations: bool) -> list[str]:
-    tools: list[str] = []
-    raw_lower = raw_output.lower()
-    if "weather" in raw_lower or "天气查询结果" in raw_output:
-        tools.append("get_weather")
-    if "最近会话上下文" in raw_output:
-        tools.append("get_session_context")
-    if has_citations:
-        tools.append("search_knowledge")
-    return tools
-
-
-def _build_rag_augmented_input(user_message: str, retrieval: Optional[RagRetrieval]) -> str:
-    if not retrieval or not retrieval.context:
-        return user_message
-    return (
-        "请优先根据下面的知识库检索片段回答用户问题。"
-        "如果片段与问题无关，请明确说明没有找到可靠依据；"
-        "如果片段中包含答案，请引用来源文件并给出直接结论。"
-        "回答控制在 6 句话以内，避免复述无关片段。\n\n"
-        f"{retrieval.context}\n\n"
-        f"【用户问题】\n{user_message}"
-    )
-
-
-def _merge_citations(*groups: List[Citation]) -> List[Citation]:
-    seen: set[tuple[str, str]] = set()
-    merged: List[Citation] = []
-    for group in groups:
-        for item in group:
-            key = (item.source, item.excerpt)
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(item)
-    return merged
-
-
-def _citation_sources(citations: List[Citation]) -> List[str]:
-    return [item.source for item in citations if item.source]
-
-
-def _should_stream_response(settings: Any, executor: Any) -> tuple[bool, str]:
-    if not settings.stream_output:
-        return False, "stream_output_disabled"
-    if settings.structured_output:
-        return False, "structured_output_enabled"
-    if not hasattr(executor, "stream"):
-        return False, "executor_not_streamable"
-    return True, "enabled"
-
-
-def _normalize_stream_output_format(value: str) -> str:
-    normalized = str(value or "plain").strip().lower()
-    return normalized if normalized in {"plain", "sse"} else "plain"
-
-
-_STREAM_DONE = object()
-
-
-def _next_stream_chunk(iterator: Any) -> Any:
-    return next(iterator, _STREAM_DONE)
-
-
 @app.get("/")
 def root() -> Dict[str, Any]:
     return {
@@ -339,344 +267,36 @@ async def ingest(req: IngestRequest, request: Request) -> IngestResponse:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     started_at = time.perf_counter()
-    logger.info(
-        "chat start session_id=%s message_length=%s",
-        req.session_id,
-        len(req.message),
-    )
     settings = get_settings()
-    logger.info("chat settings loaded in %.3fs", time.perf_counter() - started_at)
-
-    reset_started_at = time.perf_counter()
-    reset_rag_sources()
-    logger.info("chat rag context reset in %.3fs", time.perf_counter() - reset_started_at)
-
-    session_started_at = time.perf_counter()
-    logger.info("chat session load start session_id=%s", req.session_id)
-    payload, client = get_redis_session(req.session_id, settings=settings)
-    logger.info(
-        "chat session load done in %.3fs backend=%s messages=%s summary_chars=%s",
-        time.perf_counter() - session_started_at,
-        "memory" if isinstance(client, InMemoryRedis) else "redis",
-        len(payload.get("messages") or []),
-        len(str(payload.get("summary") or "")),
+    # 编排已抽到 ChatTurnRunner（对标 Hermes conversation_loop）。
+    # 这里在请求期注入可被测试 monkeypatch 的协作者（按 main 模块解析），保留 patch 语义。
+    runner = ChatTurnRunner(
+        settings,
+        request.app.state.job_queue,
+        build_agent_executor=build_agent_executor,
+        get_vector_store=get_vector_store,
+        structured_chat_output_from_text=structured_chat_output_from_text,
+        get_last_rag_sources=get_last_rag_sources,
+        get_last_rag_citations=get_last_rag_citations,
+    )
+    prepared = await runner.prepare(
+        TurnInput(session_id=req.session_id, message=req.message)
     )
 
-    history_started_at = time.perf_counter()
-    # TODO 一 优化内容 提示词抽象出一个顶级接口类 统一会话提示词层
-    #  用于标准化 更标准做法是三层分离：系统基线策略（全局）→ 项目/团队策略（repo级）→ 用户会话策略（职责、偏好、目标 agent 形态）。
-    #  运行前先收集用户画像与目标，就是在构建第三层
-    #  首次会话引导问答 → 生成 session_policy 持久化 → 每轮在 system prompt 前部注入 ？ deer-flow思想 是否可以采用 claude code、cursor思想 ？
-    history = messages_from_payload(list(payload.get("messages") or []))
-    windowed = trim_message_window(history, settings.memory_window_pairs)
-    logger.info(
-        "chat history prepared in %.3fs total_messages=%s windowed_messages=%s",
-        time.perf_counter() - history_started_at,
-        len(history),
-        len(windowed),
-    )
-
-    vs_started_at = time.perf_counter()
-    logger.info("chat vector store prepare start")
-    # TODO 二 优化内容 postgresql 元数据存储 +  redis会话加速存储 +  milvus向量存储 抽象出一个顶级接口类 统一存储层
-    vs = get_vector_store(settings)
-    logger.info(
-        "chat vector store prepare done in %.3fs enabled=%s",
-        time.perf_counter() - vs_started_at,
-        vs is not None,
-    )
-
-    rag_prefetch_started_at = time.perf_counter()
-    rag_retrieval: Optional[RagRetrieval] = None
-    if vs is not None:
-        try:
-            rag_retrieval = await asyncio.to_thread(
-                retrieve_knowledge_context,
-                vs,
-                req.message,
-                k=24,
-            )
-        except Exception:
-            logger.exception("chat rag prefetch failed")
-            rag_retrieval = None
-    prefetched_rag_citations = [
-        Citation(**item) for item in (rag_retrieval.citations if rag_retrieval else [])
-    ]
-    llm_input = _build_rag_augmented_input(req.message, rag_retrieval)
-    logger.info(
-        "chat rag prefetch done in %.3fs sources=%s context_chars=%s",
-        time.perf_counter() - rag_prefetch_started_at,
-        rag_retrieval.sources if rag_retrieval else [],
-        len(rag_retrieval.context if rag_retrieval else ""),
-    )
-
-    executor_started_at = time.perf_counter()
-    logger.info("chat executor build start")
-    # TODO 三 优化内容
-    #       1 LLM 抽象一个顶级接口类 用于扩展方便  统一LLM模型层
-    #       2 ChatPromptTemplate 结构深度优化 完成顶级Prompt抽象接口
-    #           SystemPrompt是Agent最重要的关键，应该强制约束 ReAct管理、 Retrival RAG管理、Tools_CALL 工具调用管理 这些都应该符合顶级抽象接口，有自己的提示词规范约束
-    #           防止Token爆炸 合理利用ReAct 并且在进行过程是否可以展示 当前处于可观测的thinking、act、observe阶段
-    #       3 TOOL抽象顶级接口 便于拔插 支持配置化注册工具  支持调用开源的优秀工具
-    executor = build_agent_executor(
-        vector_store=vs,
-        chat_history=windowed,
-        rolling_summary=str(payload.get("summary") or "") or None,
-        settings=settings,
-    )
-    logger.info(
-        "chat executor build done in %.3fs",
-        time.perf_counter() - executor_started_at,
-    )
-
-    should_stream, stream_reason = _should_stream_response(settings, executor)
-    logger.info(
-        "chat stream decision enabled=%s reason=%s",
-        should_stream,
-        stream_reason,
-    )
-
-    if should_stream:
-        logger.info("chat streaming response start")
-        stream_format = _normalize_stream_output_format(settings.stream_output_format)
-        logger.info("chat streaming response format=%s", stream_format)
-
-        async def event_stream():
-            stream_started_at = time.perf_counter()
-            payload_input = {"input": llm_input, "chat_history": windowed}
-            full_output_parts: list[str] = []
-            persisted_stream_events: list[dict[str, Any]] = []
-            if stream_format == "sse":
-                start_event = {"type": "start", "session_id": req.session_id}
-                persisted_stream_events.append(
-                    {
-                        "seq": 0,
-                        "event_type": "start",
-                        "content": json.dumps(start_event, ensure_ascii=False),
-                    }
-                )
-                yield (
-                    "data: "
-                    + json.dumps(
-                        start_event,
-                        ensure_ascii=False,
-                    )
-                    + "\n\n"
-                )
-            # Query Loop Block Executor Next Result
-            iterator = executor.stream(payload_input)
-            while True:
-                chunk = await asyncio.to_thread(_next_stream_chunk, iterator)
-                if chunk is _STREAM_DONE:
-                    break
-                text = str(chunk.get("output") or "")
-                if not text:
-                    continue
-                full_output_parts.append(text)
-                if stream_format == "sse":
-                    persisted_stream_events.append(
-                        {
-                            "seq": len(persisted_stream_events),
-                            "event_type": "chunk",
-                            "content": text,
-                        }
-                    )
-                    yield (
-                        "data: "
-                        + json.dumps(
-                            {"type": "chunk", "content": text}, ensure_ascii=False
-                        )
-                        + "\n\n"
-                    )
-                else:
-                    persisted_stream_events.append(
-                        {
-                            "seq": len(persisted_stream_events),
-                            "event_type": "chunk",
-                            "content": text,
-                        }
-                    )
-                    yield text
-
-            answer = "".join(full_output_parts)
-            tool_rag_citations = [
-                Citation(**item) for item in get_last_rag_citations()
-            ]
-            stream_rag_citations = _merge_citations(
-                prefetched_rag_citations,
-                tool_rag_citations,
-            )
-            stream_rag_sources = sorted(
-                set(_citation_sources(stream_rag_citations) + get_last_rag_sources())
-            )
-            stream_rag_hint = ",".join(stream_rag_sources)
-            stream_tools_used = _detect_used_tools(answer, bool(stream_rag_citations))
-            append_turn_and_save(
-                client,
-                req.session_id,
-                payload,
-                req.message,
-                answer,
-            )
-            postgres_persistence.persist_chat_turn(
-                session_id=req.session_id,
-                user_message=req.message,
-                assistant_message=answer,
-                raw_output=answer,
-                response_source=stream_rag_hint or "agent",
-                tools_used=stream_tools_used,
-                citations=[item.model_dump() for item in stream_rag_citations],
-                response_mode="stream",
-                stream_format=stream_format,
-                settings=settings,
-            )
-            if stream_format == "sse":
-                done_payload = {
-                    "type": "done",
-                    "session_id": req.session_id,
-                    "answer": answer,
-                    "source": stream_rag_hint or "agent",
-                    "citations": [
-                        item.model_dump() for item in stream_rag_citations
-                    ],
-                    "tools_used": stream_tools_used,
-                }
-                persisted_stream_events.append(
-                    {
-                        "seq": len(persisted_stream_events),
-                        "event_type": "done",
-                        "content": json.dumps(done_payload, ensure_ascii=False),
-                    }
-                )
-            postgres_persistence.persist_stream_events(
-                session_id=req.session_id,
-                events=persisted_stream_events,
-                settings=settings,
-            )
-            if settings.async_summary_update:
-                queue: asyncio.Queue = request.app.state.job_queue
-                await enqueue_summary_update(queue, req.session_id)
-            logger.info(
-                "chat streaming response done in %.3fs answer_chars=%s",
-                time.perf_counter() - stream_started_at,
-                len(answer),
-            )
-            if stream_format == "sse":
-                yield (
-                    "data: "
-                    + json.dumps(done_payload, ensure_ascii=False)
-                    + "\n\n"
-                )
-
-        media_type = "text/event-stream" if stream_format == "sse" else "text/plain"
-        return StreamingResponse(event_stream(), media_type=media_type)
-
-    try:
-        invoke_started_at = time.perf_counter()
-        logger.info("chat agent invoke start")
-        result = await asyncio.to_thread(
-            executor.invoke,
-            {"input": llm_input, "chat_history": windowed},
+    if prepared.should_stream:
+        media_type = (
+            "text/event-stream" if prepared.stream_format == "sse" else "text/plain"
         )
-        logger.info(
-            "chat agent invoke done in %.3fs result_keys=%s",
-            time.perf_counter() - invoke_started_at,
-            sorted(result.keys()),
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.exception("Agent 调用失败")
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        return StreamingResponse(runner.iter_stream(prepared), media_type=media_type)
 
-    postprocess_started_at = time.perf_counter()
-    raw = str(result.get("output") or "")
-    rag_citations = _merge_citations(
-        prefetched_rag_citations,
-        [Citation(**item) for item in get_last_rag_citations()],
-    )
-    rag_sources = sorted(set(_citation_sources(rag_citations) + get_last_rag_sources()))
-    rag_hint = ",".join(sorted(set(rag_sources))) if rag_sources else ""
-    tools_used = _detect_used_tools(raw, bool(rag_citations))
-    logger.info(
-        "chat result parsed in %.3fs raw_chars=%s citations=%s tools=%s",
-        time.perf_counter() - postprocess_started_at,
-        len(raw),
-        len(rag_citations),
-        tools_used,
-    )
-
-    if settings.structured_output:
-        try:
-            structured_started_at = time.perf_counter()
-            logger.info("chat structured output start")
-            structured = await asyncio.to_thread(
-                structured_chat_output_from_text,
-                raw,
-                rag_hint=rag_hint,
-                citations=rag_citations,
-                tools_used=tools_used,
-                settings=settings,
-            )
-            logger.info(
-                "chat structured output done in %.3fs answer_chars=%s",
-                time.perf_counter() - structured_started_at,
-                len(structured.answer or ""),
-            )
-        except Exception:
-            logger.exception("结构化输出失败，回退为原文本")
-            structured = ChatOutput(
-                answer=raw,
-                source=rag_hint or "agent",
-                citations=rag_citations,
-                tools_used=tools_used,
-            )
-    else:
-        structured = ChatOutput(
-            answer=raw,
-            source=rag_hint or "agent",
-            citations=rag_citations,
-            tools_used=tools_used,
-        )
-
-    save_started_at = time.perf_counter()
-    logger.info("chat session save start")
-    append_turn_and_save(
-        client,
-        req.session_id,
-        payload,
-        req.message,
-        structured.answer,
-    )
-    postgres_persistence.persist_chat_turn(
-        session_id=req.session_id,
-        user_message=req.message,
-        assistant_message=structured.answer,
-        raw_output=raw,
-        response_source=structured.source or rag_hint or "agent",
-        tools_used=structured.tools_used,
-        citations=[item.model_dump() for item in structured.citations],
-        response_mode="invoke",
-        stream_format="",
-        settings=settings,
-    )
-    logger.info("chat session save done in %.3fs", time.perf_counter() - save_started_at)
-
-    if settings.async_summary_update:
-        summary_started_at = time.perf_counter()
-        logger.info("chat summary enqueue start")
-        queue: asyncio.Queue = request.app.state.job_queue
-        await enqueue_summary_update(queue, req.session_id)
-        logger.info(
-            "chat summary enqueue done in %.3fs",
-            time.perf_counter() - summary_started_at,
-        )
-
+    result = await runner.run_blocking(prepared)
     response = ChatResponse(
-        answer=structured.answer,
-        source=structured.source or rag_hint or "",
-        citations=structured.citations,
-        tools_used=structured.tools_used,
-        session_id=req.session_id,
-        raw_output=raw,
+        answer=result.answer,
+        source=result.source,
+        citations=result.citations,
+        tools_used=result.tools_used,
+        session_id=result.session_id,
+        raw_output=result.raw_output,
     )
     logger.info("chat done in %.3fs", time.perf_counter() - started_at)
     return response
