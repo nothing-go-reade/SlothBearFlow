@@ -388,5 +388,40 @@ class PostgresPersistence:
         except Exception:
             logger.exception("PostgreSQL 持久化 ingest 任务失败: job_id=%s", job_id)
 
+    def get_ingest_job(
+        self,
+        job_id: str,
+        settings: Optional[Settings] = None,
+    ) -> Optional[dict[str, Any]]:
+        settings = settings or get_settings()
+        if not self.ensure_schema(settings):
+            return None
+        try:
+            with self._get_connection(settings) as conn:
+                if conn is None:
+                    return None
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT job_id, source, text_length, status, error_detail
+                        FROM agent_ingest_jobs
+                        WHERE job_id = %s
+                        """,
+                        (job_id,),
+                    )
+                    row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "job_id": str(row[0]),
+                "source": str(row[1]),
+                "text_length": int(row[2]),
+                "status": str(row[3]),
+                "error_detail": str(row[4] or ""),
+            }
+        except Exception:
+            logger.exception("PostgreSQL 读取 ingest 任务失败: job_id=%s", job_id)
+            return None
+
 
 postgres_persistence = PostgresPersistence()

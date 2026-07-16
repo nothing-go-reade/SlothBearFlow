@@ -37,6 +37,14 @@ async def worker_loop(queue: asyncio.Queue, settings: Optional[Settings] = None)
                             settings=settings,
                         )
                     continue
+                if job_id:
+                    postgres_persistence.persist_ingest_job(
+                        job_id=job_id,
+                        source=source,
+                        text_length=len(text),
+                        status="processing",
+                        settings=settings,
+                    )
                 await asyncio.to_thread(
                     ingest_plain_text,
                     text,

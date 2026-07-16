@@ -23,11 +23,46 @@ def test_health_ok() -> None:
     assert r.status_code == 200
     body = r.json()
     assert body.get("ok") is True
+    assert body["status"] in {"ready", "degraded"}
     assert "redis" in body
     assert "milvus" in body
     assert "session_store" in body
     assert "llm" in body
     assert "embedding" in body
+    capabilities = body["capabilities"]
+    assert capabilities["agent"]["executor"] in {
+        "basic",
+        "tool_calling",
+        "explicit_react",
+    }
+    assert capabilities["rag"]["enabled"] is False
+    assert capabilities["rag"]["hybrid_retrieval"] is True
+    assert capabilities["security"]["tool_guard_mode"] == "enforce"
+    assert capabilities["security"]["output_scrubbing"] is True
+    assert capabilities["memory"]["window_pairs"] > 0
+
+
+def test_health_marks_memory_fallback_as_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.src.slothbearflow_backend import main
+    from backend.src.slothbearflow_backend.deps import InMemoryRedis
+
+    monkeypatch.setattr(main, "ping_redis", lambda settings: (True, None))
+    monkeypatch.setattr(
+        main,
+        "get_redis_session",
+        lambda session_id, settings: ({"messages": []}, InMemoryRedis()),
+    )
+
+    body = main.health()
+
+    assert body["status"] == "degraded"
+    assert body["redis"] == {
+        "ok": False,
+        "error": "using in-memory fallback",
+    }
+    assert body["session_store"]["backend"] == "memory"
 
 
 def test_root_ok() -> None:
@@ -497,6 +532,39 @@ def test_ingest_persists_job_metadata_when_postgres_enabled(monkeypatch: pytest.
     assert persisted[0]["status"] == "queued"
 
 
+def test_ingest_status_returns_persisted_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.src.slothbearflow_backend.main import app
+
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.is_enabled",
+        lambda settings=None: True,
+    )
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.get_ingest_job",
+        lambda job_id, settings=None: {
+            "job_id": job_id,
+            "source": "manual.md",
+            "text_length": 42,
+            "status": "completed",
+            "error_detail": "",
+        },
+    )
+
+    with TestClient(app) as client:
+        r = client.get("/ingest/job-123")
+
+    assert r.status_code == 200
+    assert r.json() == {
+        "job_id": "job-123",
+        "source": "manual.md",
+        "text_length": 42,
+        "status": "completed",
+        "error_detail": "",
+    }
+
+
 def test_chat_stream_persists_stream_metadata_when_postgres_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STREAM_OUTPUT", "true")
     monkeypatch.setenv("STRUCTURED_OUTPUT", "false")
@@ -757,3 +825,27 @@ def test_retrieve_knowledge_context_merges_keyword_hits() -> None:
     assert retrieval.citations[0]["source"] == "postgres.md"
     assert "PostgreSQL 是元数据引擎" in retrieval.context
     assert "overview.md" in retrieval.sources
+
+
+def test_rag_rank_prefers_precise_chinese_match_over_seed_source() -> None:
+    from langchain_core.documents import Document
+
+    from backend.src.slothbearflow_backend.tools.rag_tool import _rank_docs
+
+    docs = [
+        Document(
+            page_content="SlothBearFlow 是本地优先的 AI Agent 服务脚手架。",
+            metadata={"source": "docs/SlothBearFlow-项目知识库问答卡片.md"},
+        ),
+        Document(
+            page_content=(
+                "SlothBearFlow 全链路联调验收记录，"
+                "唯一验收口令是 SLOTH-E2E-READY-716。"
+            ),
+            metadata={"source": "integration/e2e-20260716.md"},
+        ),
+    ]
+
+    ranked = _rank_docs("SlothBearFlow 全链路验收口令是什么", docs)
+
+    assert ranked[0].metadata["source"] == "integration/e2e-20260716.md"

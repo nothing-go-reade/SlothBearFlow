@@ -59,11 +59,14 @@ def _doc_excerpt(doc: Any, *, max_chars: int = 420) -> str:
 
 def _query_terms(query: str) -> List[str]:
     lower = query.lower()
-    terms = re.findall(r"[a-z0-9_./:-]{3,}", lower)
-    for item in ("slothbearflow", "redis", "milvus", "postgres", "postgresql", "ollama", "umi", "rag"):
-        if item in lower and item not in terms:
-            terms.append(item)
-    return terms
+    terms = re.findall(r"[a-z0-9_./:-]{2,}", lower)
+    for sequence in re.findall(r"[\u4e00-\u9fff]{2,}", lower):
+        for size in (2, 3):
+            terms.extend(
+                sequence[index : index + size]
+                for index in range(max(0, len(sequence) - size + 1))
+            )
+    return list(dict.fromkeys(terms))
 
 
 def _rank_docs(query: str, docs: List[Any]) -> List[Any]:
@@ -71,21 +74,12 @@ def _rank_docs(query: str, docs: List[Any]) -> List[Any]:
 
     def score(item: Tuple[int, Any]) -> Tuple[int, int]:
         original_idx, doc = item
-        source = _doc_source(doc)
-        haystack = f"{source} {_doc_excerpt(doc, max_chars=1200)}".lower()
+        haystack = (
+            f"{_doc_source(doc)} {_doc_excerpt(doc, max_chars=1200)}".lower()
+        )
         lexical = sum(1 for term in terms if term in haystack)
-        if source == "docs/SlothBearFlow-项目知识库问答卡片.md":
-            lexical += 6
-        elif source == "docs/SlothBearFlow-项目知识库种子数据.md":
-            lexical += 5
-        elif source == "docs/SlothBearFlow-本地运行与三组件集成优化记录.md":
-            lexical += 3
-        elif source == "README.md":
-            lexical += 1
         if "是什么" in query and ("是什么" in haystack or "项目定位" in haystack):
-            lexical += 6
-        if source.startswith("codex-") or source == "manual-note.md":
-            lexical -= 2
+            lexical += 2
         return lexical, -original_idx
 
     ranked = sorted(enumerate(docs), key=score, reverse=True)

@@ -1,38 +1,80 @@
 import React from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import {
   Activity,
   AlertCircle,
   ArrowUp,
   BookOpenText,
   Bot,
+  BrainCircuit,
   CheckCircle2,
   Database,
   FilePlus2,
   Gauge,
+  History,
+  Layers3,
   Loader2,
+  LockKeyhole,
   MessageSquareText,
-  PauseCircle,
-  Play,
+  Plus,
   RefreshCw,
+  Search,
   Server,
-  Sparkles,
+  ShieldCheck,
   Square,
-  TerminalSquare,
   Trash2,
   UserRound,
-  Waves,
+  Wrench,
+  XCircle,
+  Zap,
 } from "lucide-react";
 import "./index.css";
 
+type CapabilityState = {
+  agent?: {
+    executor: "basic" | "tool_calling" | "explicit_react";
+    tool_calling: boolean;
+    streaming: boolean;
+    stream_format: string;
+    structured_output: boolean;
+  };
+  security?: {
+    tool_guard_mode: "off" | "log" | "enforce";
+    output_scrubbing: boolean;
+    max_tool_calls_per_turn: number;
+    approval_mode: string;
+  };
+  rag?: {
+    enabled: boolean;
+    available: boolean;
+    hybrid_retrieval: boolean;
+  };
+  memory?: {
+    session_backend: string;
+    window_pairs: number;
+    summary_enabled: boolean;
+    postgres_restore: boolean;
+  };
+  learning?: {
+    background_review: boolean;
+    prompt_injection: boolean;
+  };
+};
+
 type Health = {
   ok: boolean;
+  status?: "ready" | "degraded";
   redis?: { ok: boolean; error?: string | null };
   session_store?: { backend: string; loaded_messages: number };
   milvus?: { enabled: boolean; reason?: string; collection?: string };
-  postgres_persistence?: { enabled: boolean; ready?: boolean; reason?: string };
+  postgres_persistence?: {
+    enabled: boolean;
+    ready?: boolean;
+    reason?: string;
+  };
   llm?: { provider: string; model: string };
   embedding?: { provider: string; model: string };
-  ollama_base_url?: string;
+  capabilities?: CapabilityState;
 };
 
 type ChatMessage = {
@@ -45,20 +87,44 @@ type ChatMessage = {
   toolsUsed?: string[];
 };
 
-type TraceEvent = {
+type ActivityEvent = {
   id: string;
   time: string;
   tone: "info" | "ok" | "warn" | "error";
   text: string;
 };
 
-const promptStarters = [
-  "总结当前 Agent 服务架构。",
-  "检查 Redis、Milvus、Postgres 的职责和状态。",
-  "给出一个新工具接入计划。",
-];
+type IngestResult = {
+  tone: "pending" | "ok" | "error";
+  source: string;
+  detail: string;
+  time: string;
+};
+
+type InspectorTab = "run" | "knowledge" | "security";
 
 const API_BASE = "http://127.0.0.1:8000";
+
+const promptStarters = [
+  "梳理当前 Agent 的执行链路",
+  "检查 RAG 检索与引用状态",
+  "评估工具调用的安全边界",
+];
+
+const executorLabels: Record<string, string> = {
+  basic: "基础对话",
+  tool_calling: "Tool Calling",
+  explicit_react: "Explicit ReAct",
+};
+
+const markdownComponents: Components = {
+  a: ({ children }) => (
+    <span className="inline-reference">{children}</span>
+  ),
+  img: ({ alt }) => (
+    <span className="inline-reference">{alt || "image"}</span>
+  ),
+};
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -72,53 +138,108 @@ function nowLabel() {
   });
 }
 
-function statusTone(ok?: boolean) {
-  if (ok === true) return "ok";
-  if (ok === false) return "warn";
-  return "info";
+function welcomeMessage(): ChatMessage {
+  return {
+    id: uid(),
+    role: "assistant",
+    content: "SlothBearFlow 已连接到本地 Agent 运行时。",
+    status: "done",
+    meta: "system",
+  };
+}
+
+function InspectorRow({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  tone = "neutral",
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: string;
+  detail?: string;
+  tone?: "ok" | "warn" | "error" | "neutral";
+}) {
+  return (
+    <div className="inspector-row">
+      <span className={"row-icon " + tone}>
+        <Icon size={16} />
+      </span>
+      <div className="row-copy">
+        <span>{label}</span>
+        {detail ? <small>{detail}</small> : null}
+      </div>
+      <strong className={"row-value " + tone}>{value}</strong>
+    </div>
+  );
 }
 
 export default function HomePage() {
   const [health, setHealth] = React.useState<Health | null>(null);
   const [healthLoading, setHealthLoading] = React.useState(false);
+  const [lastChecked, setLastChecked] = React.useState("");
   const [messages, setMessages] = React.useState<ChatMessage[]>([
-    {
-      id: uid(),
-      role: "assistant",
-      content: "已连接本地 Agent 服务。可以开始一次运行。",
-      status: "done",
-      meta: "system",
-    },
+    welcomeMessage(),
   ]);
   const [input, setInput] = React.useState("");
-  const [sessionId, setSessionId] = React.useState(() => `web-${Date.now()}`);
+  const [sessionId, setSessionId] = React.useState(
+    () => "web-" + Date.now(),
+  );
   const [isSending, setIsSending] = React.useState(false);
-  const [events, setEvents] = React.useState<TraceEvent[]>([]);
+  const [events, setEvents] = React.useState<ActivityEvent[]>([]);
+  const [activeTab, setActiveTab] = React.useState<InspectorTab>("run");
   const [sourceName, setSourceName] = React.useState("manual-note.md");
   const [knowledgeText, setKnowledgeText] = React.useState("");
   const [ingesting, setIngesting] = React.useState(false);
+  const [ingestResult, setIngestResult] =
+    React.useState<IngestResult | null>(null);
   const abortRef = React.useRef<AbortController | null>(null);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const inspectorRef = React.useRef<HTMLElement | null>(null);
+  const ingestPollTokenRef = React.useRef(0);
+  const previousHealthRef = React.useRef("");
 
-  const pushEvent = React.useCallback((tone: TraceEvent["tone"], text: string) => {
-    setEvents((current) =>
-      [{ id: uid(), time: nowLabel(), tone, text }, ...current].slice(0, 18),
-    );
-  }, []);
+  const pushEvent = React.useCallback(
+    (tone: ActivityEvent["tone"], text: string) => {
+      setEvents((current) =>
+        [{ id: uid(), time: nowLabel(), tone, text }, ...current].slice(0, 24),
+      );
+    },
+    [],
+  );
 
   const refreshHealth = React.useCallback(async () => {
     setHealthLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/health`);
+      const response = await fetch(API_BASE + "/health");
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error("HTTP " + response.status);
       }
       const data = (await response.json()) as Health;
+      const nextState = data.status || (data.ok ? "ready" : "degraded");
       setHealth(data);
-      pushEvent(data.ok ? "ok" : "warn", `health: ${data.ok ? "ready" : "degraded"}`);
+      setLastChecked(nowLabel());
+      if (previousHealthRef.current !== nextState) {
+        pushEvent(
+          nextState === "ready" ? "ok" : "warn",
+          nextState === "ready"
+            ? "运行依赖已就绪"
+            : "服务已响应，部分依赖正在降级",
+        );
+        previousHealthRef.current = nextState;
+      }
     } catch (error) {
       setHealth(null);
-      pushEvent("error", `health failed: ${error instanceof Error ? error.message : String(error)}`);
+      setLastChecked(nowLabel());
+      if (previousHealthRef.current !== "offline") {
+        pushEvent(
+          "error",
+          "健康检查失败：" +
+            (error instanceof Error ? error.message : String(error)),
+        );
+        previousHealthRef.current = "offline";
+      }
     } finally {
       setHealthLoading(false);
     }
@@ -136,62 +257,6 @@ export default function HomePage() {
       behavior: "smooth",
     });
   }, [messages]);
-
-  async function readStream(
-    response: Response,
-    assistantId: string,
-  ) {
-    const contentType = response.headers.get("content-type") || "";
-    if (!response.body) {
-      const text = await response.text();
-      updateAssistant(assistantId, text, "done");
-      return;
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let fullText = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-
-      if (contentType.includes("text/event-stream")) {
-        buffer += chunk;
-        const frames = buffer.split("\n\n");
-        buffer = frames.pop() || "";
-        for (const frame of frames) {
-          const line = frame
-            .split("\n")
-            .find((item) => item.startsWith("data:"));
-          if (!line) continue;
-          const payload = JSON.parse(line.replace(/^data:\s*/, ""));
-          if (payload.type === "chunk") {
-            fullText += payload.content || "";
-            updateAssistant(assistantId, fullText, "streaming");
-          }
-          if (payload.type === "done") {
-            fullText = payload.answer || fullText;
-            updateAssistant(
-              assistantId,
-              fullText,
-              "done",
-              payload.source || "agent",
-              Array.isArray(payload.citations) ? payload.citations : [],
-              Array.isArray(payload.tools_used) ? payload.tools_used : [],
-            );
-          }
-        }
-      } else {
-        fullText += chunk;
-        updateAssistant(assistantId, fullText, "streaming");
-      }
-    }
-
-    updateAssistant(assistantId, fullText, "done");
-  }
 
   function updateAssistant(
     assistantId: string,
@@ -217,45 +282,113 @@ export default function HomePage() {
     );
   }
 
+  async function readStream(response: Response, assistantId: string) {
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.body) {
+      const text = await response.text();
+      updateAssistant(assistantId, text, "done");
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullText = "";
+    let completed = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+
+      if (!contentType.includes("text/event-stream")) {
+        fullText += chunk;
+        updateAssistant(assistantId, fullText, "streaming");
+        continue;
+      }
+
+      buffer += chunk;
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() || "";
+      for (const frame of frames) {
+        const data = frame
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.replace(/^data:\s*/, ""))
+          .join("\n");
+        if (!data) continue;
+        try {
+          const payload = JSON.parse(data);
+          if (payload.type === "chunk") {
+            fullText += payload.content || "";
+            updateAssistant(assistantId, fullText, "streaming");
+          }
+          if (payload.type === "done") {
+            completed = true;
+            fullText = payload.answer || fullText;
+            updateAssistant(
+              assistantId,
+              fullText,
+              "done",
+              payload.source || "agent",
+              Array.isArray(payload.citations) ? payload.citations : [],
+              Array.isArray(payload.tools_used) ? payload.tools_used : [],
+            );
+          }
+        } catch {
+          pushEvent("warn", "收到无法解析的流事件");
+        }
+      }
+    }
+
+    if (!completed) {
+      updateAssistant(assistantId, fullText, "done");
+    }
+  }
+
   async function sendMessage(messageText = input) {
     const trimmed = messageText.trim();
-    if (!trimmed || isSending) return;
+    if (!trimmed || !sessionId.trim() || isSending) return;
 
-    const userMessage: ChatMessage = {
-      id: uid(),
-      role: "user",
-      content: trimmed,
-      status: "done",
-      meta: sessionId,
-    };
     const assistantId = uid();
-    const assistantMessage: ChatMessage = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      status: "streaming",
-      meta: "waiting for backend",
-    };
-
-    setMessages((current) => [...current, userMessage, assistantMessage]);
+    setMessages((current) => [
+      ...current,
+      {
+        id: uid(),
+        role: "user",
+        content: trimmed,
+        status: "done",
+        meta: sessionId,
+      },
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        status: "streaming",
+        meta: "agent",
+      },
+    ]);
     setInput("");
     setIsSending(true);
-    pushEvent("info", `chat request: ${trimmed.slice(0, 48)}`);
+    pushEvent("info", "已提交对话请求");
 
     const controller = new AbortController();
     abortRef.current = controller;
 
     try {
-      const response = await fetch(`${API_BASE}/chat`, {
+      const response = await fetch(API_BASE + "/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, message: trimmed }),
+        body: JSON.stringify({
+          session_id: sessionId.trim(),
+          message: trimmed,
+        }),
         signal: controller.signal,
       });
 
       if (!response.ok) {
         const detail = await response.text();
-        throw new Error(detail || `HTTP ${response.status}`);
+        throw new Error(detail || "HTTP " + response.status);
       }
 
       const contentType = response.headers.get("content-type") || "";
@@ -272,16 +405,17 @@ export default function HomePage() {
       } else {
         await readStream(response, assistantId);
       }
-      pushEvent("ok", "chat response completed");
+      pushEvent("ok", "Agent 响应完成");
     } catch (error) {
-      const message =
-        error instanceof DOMException && error.name === "AbortError"
-          ? "请求已停止。"
-          : error instanceof Error
-            ? error.message
-            : String(error);
+      const aborted =
+        error instanceof DOMException && error.name === "AbortError";
+      const message = aborted
+        ? "请求已停止。"
+        : error instanceof Error
+          ? error.message
+          : String(error);
       updateAssistant(assistantId, message, "error", "request failed");
-      pushEvent(error instanceof DOMException && error.name === "AbortError" ? "warn" : "error", message);
+      pushEvent(aborted ? "warn" : "error", message);
     } finally {
       setIsSending(false);
       abortRef.current = null;
@@ -290,232 +424,463 @@ export default function HomePage() {
 
   async function ingestKnowledge() {
     const text = knowledgeText.trim();
+    const source = sourceName.trim() || "upload";
     if (!text || ingesting) return;
+
     setIngesting(true);
-    pushEvent("info", `ingest queued: ${sourceName}`);
+    setIngestResult(null);
+    const pollToken = ++ingestPollTokenRef.current;
+    pushEvent("info", "知识写入任务已提交");
     try {
-      const response = await fetch(`${API_BASE}/ingest`, {
+      const response = await fetch(API_BASE + "/ingest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: sourceName.trim() || "upload", text }),
+        body: JSON.stringify({ source, text }),
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || `HTTP ${response.status}`);
+        throw new Error(data.detail || "HTTP " + response.status);
       }
       setKnowledgeText("");
-      pushEvent("ok", `ingest accepted: ${data.job_id}`);
+      setIngestResult({
+        tone: "pending",
+        source,
+        detail: "排队中 · " + data.job_id,
+        time: nowLabel(),
+      });
+      pushEvent("ok", "知识写入任务已进入队列");
+      void pollIngestJob(data.job_id, source, pollToken);
     } catch (error) {
-      pushEvent("warn", error instanceof Error ? error.message : String(error));
+      const detail =
+        error instanceof Error ? error.message : String(error);
+      setIngestResult({
+        tone: "error",
+        source,
+        detail,
+        time: nowLabel(),
+      });
+      pushEvent("error", "知识写入失败");
     } finally {
       setIngesting(false);
     }
   }
 
-  const healthCards = [
+  async function pollIngestJob(
+    jobId: string,
+    source: string,
+    pollToken: number,
+  ) {
+    const terminalStates = new Set(["completed", "failed", "skipped"]);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 1000);
+      });
+      if (ingestPollTokenRef.current !== pollToken) return;
+
+      try {
+        const response = await fetch(API_BASE + "/ingest/" + jobId);
+        if (response.status === 503) {
+          setIngestResult({
+            tone: "pending",
+            source,
+            detail: "已接受，任务状态查询未启用 · " + jobId,
+            time: nowLabel(),
+          });
+          return;
+        }
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.detail || "HTTP " + response.status);
+        }
+
+        const status = String(data.status || "queued");
+        if (status === "completed") {
+          setIngestResult({
+            tone: "ok",
+            source,
+            detail: "写入完成 · " + jobId,
+            time: nowLabel(),
+          });
+          pushEvent("ok", "知识写入任务已完成");
+          return;
+        }
+        if (terminalStates.has(status)) {
+          setIngestResult({
+            tone: "error",
+            source,
+            detail:
+              (data.error_detail || "任务未完成") + " · " + jobId,
+            time: nowLabel(),
+          });
+          pushEvent("error", "知识写入任务状态：" + status);
+          return;
+        }
+        setIngestResult({
+          tone: "pending",
+          source,
+          detail:
+            (status === "processing" ? "正在向量化" : "排队中") +
+            " · " +
+            jobId,
+          time: nowLabel(),
+        });
+      } catch (error) {
+        if (attempt === 29) {
+          setIngestResult({
+            tone: "pending",
+            source,
+            detail: "状态查询超时 · " + jobId,
+            time: nowLabel(),
+          });
+          pushEvent(
+            "warn",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
+    }
+  }
+
+  function startNewSession() {
+    const nextSession = "web-" + Date.now();
+    setSessionId(nextSession);
+    setMessages([welcomeMessage()]);
+    setInput("");
+    pushEvent("info", "已创建新会话");
+  }
+
+  function showInspector(nextTab: InspectorTab) {
+    setActiveTab(nextTab);
+    if (window.matchMedia("(max-width: 920px)").matches) {
+      window.requestAnimationFrame(() => {
+        inspectorRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      });
+    }
+  }
+
+  const capabilities = health?.capabilities;
+  const backendState = health
+    ? health.status || (health.ok ? "ready" : "degraded")
+    : healthLoading
+      ? "checking"
+      : "offline";
+  const stateTone =
+    backendState === "ready"
+      ? "ok"
+      : backendState === "offline"
+        ? "error"
+        : "warn";
+  const stateLabel =
+    backendState === "ready"
+      ? "Ready"
+      : backendState === "degraded"
+        ? "Degraded"
+        : backendState === "offline"
+          ? "Offline"
+          : "Checking";
+  const modelName = health?.llm
+    ? health.llm.provider + " / " + health.llm.model
+    : "等待后端";
+  const executor = capabilities?.agent?.executor || "basic";
+  const executorLabel = executorLabels[executor] || executor;
+  const sessionBackend =
+    capabilities?.memory?.session_backend ||
+    health?.session_store?.backend ||
+    "checking";
+  const ragConfigured =
+    capabilities?.rag?.enabled ??
+    Boolean(health?.milvus?.enabled);
+  const ragAvailable =
+    capabilities?.rag?.available ??
+    Boolean(health?.milvus?.enabled);
+  const streamLabel = capabilities?.agent?.streaming
+    ? (capabilities.agent.stream_format || "stream").toUpperCase()
+    : "JSON";
+  const toolGuardMode =
+    capabilities?.security?.tool_guard_mode || "unknown";
+  const approvalMode = capabilities?.security?.approval_mode;
+  const approvalLabel =
+    approvalMode === "headless_auto_deny"
+      ? "auto deny"
+      : approvalMode || "unknown";
+
+  const serviceRows = [
     {
-      label: "LLM",
-      value: health?.llm ? `${health.llm.provider} · ${health.llm.model}` : "checking",
-      tone: health ? "ok" : "info",
       icon: Bot,
+      label: "模型运行时",
+      value: health?.llm?.provider || "checking",
+      detail: health?.llm?.model || "等待健康检查",
+      tone: health?.llm ? "ok" : "neutral",
     },
     {
-      label: "Redis",
-      value: health?.redis?.ok
-        ? `online · ${health.session_store?.backend || "redis"}`
-        : health?.session_store?.backend
-          ? `fallback · ${health.session_store.backend}`
-          : "checking",
-      tone: statusTone(health?.redis?.ok),
       icon: Database,
+      label: "会话记忆",
+      value: sessionBackend,
+      detail: health?.redis?.ok
+        ? "Redis 可用"
+        : health?.redis?.error || "状态未知",
+      tone: health?.redis?.ok ? "ok" : health ? "warn" : "neutral",
     },
     {
-      label: "Milvus",
-      value: health?.milvus?.enabled
-        ? health.milvus.collection || "enabled"
-        : health?.milvus?.reason || "checking",
-      tone: health?.milvus?.enabled ? "ok" : "warn",
-      icon: BookOpenText,
+      icon: Search,
+      label: "RAG 检索",
+      value: ragAvailable ? "available" : ragConfigured ? "degraded" : "off",
+      detail: ragAvailable
+        ? health?.milvus?.collection || "混合检索"
+        : health?.milvus?.reason || "等待健康检查",
+      tone: ragAvailable ? "ok" : ragConfigured ? "warn" : "neutral",
     },
     {
-      label: "Postgres",
+      icon: Server,
+      label: "持久化",
       value: health?.postgres_persistence?.enabled
         ? health.postgres_persistence.ready
           ? "ready"
-          : health.postgres_persistence.reason || "enabled"
-        : health?.postgres_persistence?.reason || "checking",
-      tone: health?.postgres_persistence?.enabled ? statusTone(health.postgres_persistence.ready) : "info",
-      icon: Server,
+          : "degraded"
+        : "off",
+      detail:
+        health?.postgres_persistence?.reason ||
+        (health?.postgres_persistence?.ready ? "Postgres 可用" : "按配置关闭"),
+      tone: health?.postgres_persistence?.ready
+        ? "ok"
+        : health?.postgres_persistence?.enabled
+          ? "warn"
+          : "neutral",
     },
   ] as const;
 
-  const serviceState = health?.ok ? "Ready" : "Checking";
-  const modelName = health?.llm ? `${health.llm.provider}/${health.llm.model}` : "model pending";
-  const memoryState = health?.redis?.ok
-    ? health.session_store?.backend || "redis"
-    : health?.session_store?.backend || "memory";
-  const ragState = health?.milvus?.enabled ? "enabled" : "disabled";
-
   return (
-    <div className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <div className="brand-mark">
-            <Waves size={20} />
-          </div>
-          <div>
+    <div className="console-shell">
+      <aside className="side-rail">
+        <div className="brand-block">
+          <span className="brand-mark">
+            <Layers3 size={19} />
+          </span>
+          <div className="brand-copy">
             <strong>SlothBearFlow</strong>
-            <span>Local Agent Workspace</span>
+            <span>Agent Console</span>
           </div>
         </div>
-        <div className="topbar-actions">
-          <div className="top-status">
-            <span className={`status-dot ${health?.ok ? "ok" : "warn"}`} />
-            <strong>{serviceState}</strong>
-          </div>
-          <div className="top-meta">{modelName}</div>
-          <button className="icon-button" onClick={() => void refreshHealth()} aria-label="刷新健康状态">
-            <RefreshCw size={17} className={healthLoading ? "spin" : ""} />
+
+        <nav className="rail-nav" aria-label="工作台导航">
+          <button
+            className={activeTab === "run" ? "active" : ""}
+            onClick={() => showInspector("run")}
+            title="运行状态"
+          >
+            <Activity size={18} />
+            <span>运行状态</span>
           </button>
-          <a className="docs-link" href="/api/docs" target="_blank" rel="noreferrer">
-            API Docs
-          </a>
+          <button
+            className={activeTab === "knowledge" ? "active" : ""}
+            onClick={() => showInspector("knowledge")}
+            title="知识库"
+          >
+            <BookOpenText size={18} />
+            <span>知识库</span>
+          </button>
+          <button
+            className={activeTab === "security" ? "active" : ""}
+            onClick={() => showInspector("security")}
+            title="安全护栏"
+          >
+            <ShieldCheck size={18} />
+            <span>安全护栏</span>
+          </button>
+        </nav>
+
+        <div className="rail-spacer" />
+
+        <section className="session-block">
+          <div className="section-kicker">
+            <History size={14} />
+            <span>当前会话</span>
+          </div>
+          <label htmlFor="session-id">Session ID</label>
+          <div className="session-field">
+            <input
+              id="session-id"
+              value={sessionId}
+              maxLength={128}
+              onChange={(event) => setSessionId(event.target.value)}
+            />
+            <button
+              type="button"
+              onClick={startNewSession}
+              aria-label="新建会话"
+              title="新建会话"
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+          <div className="session-stats">
+            <span>
+              <strong>{Math.max(0, messages.length - 1)}</strong>
+              消息
+            </span>
+            <span>
+              <strong>
+                {capabilities?.memory?.window_pairs ?? "-"}
+              </strong>
+              记忆窗口
+            </span>
+          </div>
+        </section>
+
+        <div className="rail-status">
+          <span className={"status-dot " + stateTone} />
+          <div>
+            <strong>{stateLabel}</strong>
+            <span>{lastChecked || "等待检查"}</span>
+          </div>
         </div>
-      </header>
+      </aside>
 
-      <main className="workspace">
-        <aside className="rail status-rail">
-          <section className="panel status-panel">
-            <div className="panel-title">
-              <Activity size={18} />
-              <span>Service health</span>
-            </div>
-            <div className="pulse-row">
-              <span className={`pulse ${health?.ok ? "ok" : "warn"}`} />
-              <div>
-                <strong>{health?.ok ? "Backend online" : "Backend pending"}</strong>
-                <span>{health?.ollama_base_url || "health check"}</span>
-              </div>
-            </div>
-            <div className="health-stack">
-              {healthCards.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <div className={`health-card ${item.tone}`} key={item.label}>
-                    <Icon size={17} />
-                    <div>
-                      <span>{item.label}</span>
-                      <strong>{item.value}</strong>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-
-          <section className="panel session-panel">
-            <div className="panel-title">
-              <Gauge size={18} />
-              <span>Session state</span>
-            </div>
-            <label className="field-label" htmlFor="session-id">
-              Session ID
-            </label>
-            <div className="session-input">
-              <input
-                id="session-id"
-                value={sessionId}
-                onChange={(event) => setSessionId(event.target.value)}
-              />
-              <button
-                className="icon-button"
-                onClick={() => setSessionId(`web-${Date.now()}`)}
-                aria-label="新建会话"
-              >
-                <Sparkles size={16} />
-              </button>
-            </div>
-            <div className="metric-grid">
-              <div>
-                <span>Messages</span>
-                <strong>{messages.length}</strong>
-              </div>
-              <div>
-                <span>Response</span>
-                <strong>JSON + citations</strong>
-              </div>
-            </div>
-          </section>
-        </aside>
-
-        <section className="chat-stage">
-          <div className="stage-header">
-            <div className="stage-copy">
-              <span className="eyebrow">Playground</span>
-              <h1>Agent Playground</h1>
-              <div className="stage-metrics">
-                <span>LLM · {modelName}</span>
-                <span>Memory · {memoryState}</span>
-                <span>RAG · {ragState}</span>
-              </div>
-            </div>
-            <div className="stage-controls">
-              <button
-                className="control-button"
-                disabled={!isSending}
-                onClick={() => abortRef.current?.abort()}
-              >
-                <Square size={15} />
-                Stop
-              </button>
-              <button className="control-button" onClick={() => setMessages([])}>
-                <Trash2 size={15} />
-                Clear
-              </button>
+      <main className="conversation">
+        <header className="conversation-header">
+          <div className="conversation-title">
+            <span className="eyebrow">Agent Workspace</span>
+            <h1>实时对话</h1>
+            <div className="runtime-line">
+              <span>{executorLabel}</span>
+              <i />
+              <span>{streamLabel}</span>
+              <i />
+              <span>Memory · {sessionBackend}</span>
             </div>
           </div>
+          <div className="header-actions">
+            <a
+              className="text-link"
+              href={API_BASE + "/docs"}
+              target="_blank"
+              rel="noreferrer"
+            >
+              API
+            </a>
+            <button
+              className="icon-action"
+              onClick={() => void refreshHealth()}
+              aria-label="刷新运行状态"
+              title="刷新运行状态"
+            >
+              <RefreshCw
+                size={17}
+                className={healthLoading ? "spin" : ""}
+              />
+            </button>
+            <button
+              className="icon-action"
+              onClick={() => setMessages([welcomeMessage()])}
+              aria-label="清空对话"
+              title="清空对话"
+            >
+              <Trash2 size={17} />
+            </button>
+          </div>
+        </header>
 
-          <div className="message-stream" ref={scrollRef}>
-            {messages.map((message) => (
-              <article className={`message ${message.role}`} key={message.id}>
-                <div className="avatar">
-                  {message.role === "user" ? <UserRound size={17} /> : <Bot size={17} />}
+        <div className="message-stream" ref={scrollRef} aria-live="polite">
+          {messages.length === 0 ? (
+            <div className="empty-conversation">
+              <MessageSquareText size={22} />
+              <span>当前会话暂无消息</span>
+            </div>
+          ) : (
+            messages.map((message) => (
+              <article
+                className={"message " + message.role}
+                key={message.id}
+              >
+                <div className="avatar" aria-hidden="true">
+                  {message.role === "user" ? (
+                    <UserRound size={17} />
+                  ) : (
+                    <Bot size={17} />
+                  )}
                 </div>
-                <div className="bubble">
+                <div className="message-content">
                   <div className="message-meta">
-                    <strong>{message.role === "user" ? "You" : "SlothBearFlow"}</strong>
+                    <strong>
+                      {message.role === "user" ? "你" : "SlothBearFlow"}
+                    </strong>
                     <span>{message.meta}</span>
-                    {message.status === "streaming" && <Loader2 size={14} className="spin" />}
-                    {message.status === "error" && <AlertCircle size={14} />}
+                    {message.status === "streaming" ? (
+                      <Loader2 size={14} className="spin" />
+                    ) : null}
+                    {message.status === "error" ? (
+                      <AlertCircle size={14} />
+                    ) : null}
                   </div>
-                  <p>{message.content || "..."}</p>
-                  {message.role === "assistant" && message.citations?.length ? (
-                    <div className="citation-list">
-                      <div className="citation-title">
-                        <BookOpenText size={13} />
-                        Retrieved context
+                  <div
+                    className={
+                      "message-text" +
+                      (message.role === "assistant" ? " markdown-body" : "")
+                    }
+                  >
+                    {message.role === "assistant" && message.content ? (
+                      <ReactMarkdown components={markdownComponents}>
+                        {message.content}
+                      </ReactMarkdown>
+                    ) : (
+                      message.content || "正在生成响应…"
+                    )}
+                  </div>
+
+                  {message.toolsUsed?.length ? (
+                    <div className="tool-evidence">
+                      <span className="evidence-label">
+                        <Wrench size={13} />
+                        工具调用
+                      </span>
+                      <div className="tool-list">
+                        {message.toolsUsed.map((tool) => (
+                          <span key={tool}>{tool}</span>
+                        ))}
                       </div>
-                      {message.citations.slice(0, 3).map((citation, index) => (
-                        <div className="citation-item" key={`${citation.source}-${index}`}>
-                          <strong>{citation.source}</strong>
-                          <span>{citation.excerpt}</span>
-                        </div>
-                      ))}
+                    </div>
+                  ) : null}
+
+                  {message.citations?.length ? (
+                    <div className="citation-block">
+                      <span className="evidence-label">
+                        <BookOpenText size={13} />
+                        引用来源
+                      </span>
+                      <div className="citation-list">
+                        {message.citations.slice(0, 4).map((citation, index) => (
+                          <div
+                            className="citation-item"
+                            key={citation.source + "-" + index}
+                          >
+                            <strong>{citation.source}</strong>
+                            <span>{citation.excerpt}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
                 </div>
               </article>
-            ))}
-          </div>
+            ))
+          )}
+        </div>
 
+        <div className="composer-zone">
           <div className="prompt-strip">
             {promptStarters.map((starter) => (
-              <button key={starter} onClick={() => setInput(starter)}>
+              <button
+                type="button"
+                key={starter}
+                onClick={() => setInput(starter)}
+              >
                 {starter}
               </button>
             ))}
           </div>
-
           <form
             className="composer"
             onSubmit={(event) => {
@@ -523,12 +888,11 @@ export default function HomePage() {
               void sendMessage();
             }}
           >
-            <MessageSquareText size={19} />
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="Ask SlothBearFlow..."
-              rows={1}
+              placeholder="向 SlothBearFlow 发送消息"
+              rows={2}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -536,61 +900,334 @@ export default function HomePage() {
                 }
               }}
             />
-            <button className="send-button" disabled={isSending || !input.trim()} type="submit">
-              {isSending ? <PauseCircle size={18} /> : <ArrowUp size={18} />}
-            </button>
+            {isSending ? (
+              <button
+                className="stop-button"
+                type="button"
+                onClick={() => abortRef.current?.abort()}
+                aria-label="停止生成"
+                title="停止生成"
+              >
+                <Square size={16} />
+              </button>
+            ) : (
+              <button
+                className="send-button"
+                disabled={!input.trim() || !sessionId.trim()}
+                type="submit"
+                aria-label="发送消息"
+                title="发送消息"
+              >
+                <ArrowUp size={18} />
+              </button>
+            )}
           </form>
-        </section>
-
-        <aside className="rail ops-rail">
-          <section className="panel ingest-panel">
-            <div className="panel-title">
-              <FilePlus2 size={18} />
-              <span>Knowledge source</span>
-            </div>
-            <label className="field-label" htmlFor="source-name">
-              Document
-            </label>
-            <input
-              id="source-name"
-              value={sourceName}
-              onChange={(event) => setSourceName(event.target.value)}
-            />
-            <textarea
-              className="knowledge-box"
-              value={knowledgeText}
-              onChange={(event) => setKnowledgeText(event.target.value)}
-              placeholder="Paste source text..."
-            />
-            <button className="wide-button" onClick={() => void ingestKnowledge()} disabled={ingesting || !knowledgeText.trim()}>
-              {ingesting ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
-              Ingest
-            </button>
-          </section>
-
-          <section className="panel trace-panel">
-            <div className="panel-title">
-              <TerminalSquare size={18} />
-              <span>Run events</span>
-            </div>
-            <div className="trace-list">
-              {events.length === 0 ? (
-                <div className="empty-trace">Waiting for activity</div>
-              ) : (
-                events.map((event) => (
-                  <div className={`trace-item ${event.tone}`} key={event.id}>
-                    {event.tone === "ok" ? <CheckCircle2 size={14} /> : <span className="trace-dot" />}
-                    <div>
-                      <span>{event.time}</span>
-                      <strong>{event.text}</strong>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-        </aside>
+        </div>
       </main>
+
+      <aside className="inspector" ref={inspectorRef}>
+        <header className="inspector-header">
+          <div>
+            <span className="eyebrow">Operations</span>
+            <h2>运行控制台</h2>
+          </div>
+          <span className={"compact-state " + stateTone}>
+            <i />
+            {stateLabel}
+          </span>
+        </header>
+
+        <div className="inspector-tabs" role="tablist">
+          <button
+            role="tab"
+            aria-selected={activeTab === "run"}
+            className={activeTab === "run" ? "active" : ""}
+            onClick={() => setActiveTab("run")}
+          >
+            运行
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeTab === "knowledge"}
+            className={activeTab === "knowledge" ? "active" : ""}
+            onClick={() => setActiveTab("knowledge")}
+          >
+            知识
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeTab === "security"}
+            className={activeTab === "security" ? "active" : ""}
+            onClick={() => setActiveTab("security")}
+          >
+            护栏
+          </button>
+        </div>
+
+        <div className="inspector-content">
+          {activeTab === "run" ? (
+            <>
+              <section className="state-summary">
+                <div className={"summary-signal " + stateTone}>
+                  <Zap size={18} />
+                </div>
+                <div>
+                  <span>Agent runtime</span>
+                  <strong>{modelName}</strong>
+                </div>
+              </section>
+
+              <section className="inspector-section">
+                <div className="section-heading">
+                  <Gauge size={15} />
+                  <h3>依赖状态</h3>
+                </div>
+                <div className="inspector-list">
+                  {serviceRows.map((item) => (
+                    <InspectorRow key={item.label} {...item} />
+                  ))}
+                </div>
+              </section>
+
+              <section className="inspector-section event-section">
+                <div className="section-heading">
+                  <Activity size={15} />
+                  <h3>当前会话事件</h3>
+                  <span>{events.length}</span>
+                </div>
+                <div className="event-list">
+                  {events.length ? (
+                    events.map((event) => (
+                      <div
+                        className={"event-item " + event.tone}
+                        key={event.id}
+                      >
+                        <span className="event-marker">
+                          {event.tone === "ok" ? (
+                            <CheckCircle2 size={13} />
+                          ) : event.tone === "error" ? (
+                            <XCircle size={13} />
+                          ) : (
+                            <i />
+                          )}
+                        </span>
+                        <div>
+                          <span>{event.time}</span>
+                          <strong>{event.text}</strong>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="empty-state">暂无运行事件</div>
+                  )}
+                </div>
+              </section>
+            </>
+          ) : null}
+
+          {activeTab === "knowledge" ? (
+            <>
+              <section className="state-summary">
+                <div className={"summary-signal " + (ragAvailable ? "ok" : "warn")}>
+                  <Search size={18} />
+                </div>
+                <div>
+                  <span>RAG pipeline</span>
+                  <strong>
+                    {ragAvailable
+                      ? "Milvus · Hybrid retrieval"
+                      : ragConfigured
+                        ? "Configured · unavailable"
+                        : "Disabled"}
+                  </strong>
+                </div>
+              </section>
+
+              <section className="inspector-section ingest-section">
+                <div className="section-heading">
+                  <FilePlus2 size={15} />
+                  <h3>写入知识库</h3>
+                </div>
+                <label htmlFor="source-name">来源名称</label>
+                <input
+                  id="source-name"
+                  value={sourceName}
+                  maxLength={256}
+                  onChange={(event) => setSourceName(event.target.value)}
+                />
+                <label htmlFor="knowledge-text">文档内容</label>
+                <textarea
+                  id="knowledge-text"
+                  value={knowledgeText}
+                  onChange={(event) => setKnowledgeText(event.target.value)}
+                  placeholder="粘贴待索引的文档内容"
+                  rows={9}
+                />
+                <button
+                  className="primary-action"
+                  onClick={() => void ingestKnowledge()}
+                  disabled={
+                    ingesting || !knowledgeText.trim() || !ragAvailable
+                  }
+                >
+                  {ingesting ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <FilePlus2 size={16} />
+                  )}
+                  写入知识库
+                </button>
+              </section>
+
+              {ingestResult ? (
+                <section className={"job-result " + ingestResult.tone}>
+                  <div>
+                    {ingestResult.tone === "ok" ? (
+                      <CheckCircle2 size={15} />
+                    ) : ingestResult.tone === "pending" ? (
+                      <Loader2 size={15} className="spin" />
+                    ) : (
+                      <AlertCircle size={15} />
+                    )}
+                    <strong>{ingestResult.source}</strong>
+                    <span>{ingestResult.time}</span>
+                  </div>
+                  <p>{ingestResult.detail}</p>
+                </section>
+              ) : null}
+            </>
+          ) : null}
+
+          {activeTab === "security" ? (
+            <>
+              <section className="state-summary">
+                <div
+                  className={
+                    "summary-signal " +
+                    (toolGuardMode === "enforce"
+                      ? "ok"
+                      : toolGuardMode === "off"
+                        ? "error"
+                        : "warn")
+                  }
+                >
+                  <LockKeyhole size={18} />
+                </div>
+                <div>
+                  <span>Execution policy</span>
+                  <strong>Tool Guard · {toolGuardMode}</strong>
+                </div>
+              </section>
+
+              <section className="inspector-section">
+                <div className="section-heading">
+                  <ShieldCheck size={15} />
+                  <h3>执行护栏</h3>
+                </div>
+                <div className="inspector-list">
+                  <InspectorRow
+                    icon={LockKeyhole}
+                    label="工具白名单"
+                    value={toolGuardMode}
+                    detail={
+                      toolGuardMode === "enforce"
+                        ? "未知工具默认拒绝"
+                        : "策略未处于强制模式"
+                    }
+                    tone={
+                      toolGuardMode === "enforce"
+                        ? "ok"
+                        : toolGuardMode === "off"
+                          ? "error"
+                          : "warn"
+                    }
+                  />
+                  <InspectorRow
+                    icon={Wrench}
+                    label="调用预算"
+                    value={
+                      (capabilities?.security?.max_tool_calls_per_turn ?? "-") +
+                      " / turn"
+                    }
+                    detail="全局工具调用上限"
+                    tone="neutral"
+                  />
+                  <InspectorRow
+                    icon={ShieldCheck}
+                    label="输出脱敏"
+                    value={
+                      capabilities?.security?.output_scrubbing
+                        ? "active"
+                        : "off"
+                    }
+                    detail="工具结果敏感信息清理"
+                    tone={
+                      capabilities?.security?.output_scrubbing ? "ok" : "warn"
+                    }
+                  />
+                  <InspectorRow
+                    icon={AlertCircle}
+                    label="人工审批"
+                    value={approvalLabel}
+                    detail={
+                      approvalMode === "headless_auto_deny"
+                        ? "无人值守下拒绝需审批工具"
+                        : "等待后端能力状态"
+                    }
+                    tone={approvalMode ? "ok" : "neutral"}
+                  />
+                </div>
+              </section>
+
+              <section className="inspector-section">
+                <div className="section-heading">
+                  <BrainCircuit size={15} />
+                  <h3>记忆与复盘</h3>
+                </div>
+                <div className="inspector-list">
+                  <InspectorRow
+                    icon={BrainCircuit}
+                    label="后台 Reflection"
+                    value={
+                      capabilities?.learning?.background_review ? "on" : "off"
+                    }
+                    detail="会话后复盘任务"
+                    tone={
+                      capabilities?.learning?.background_review
+                        ? "ok"
+                        : "neutral"
+                    }
+                  />
+                  <InspectorRow
+                    icon={Zap}
+                    label="学习结果注入"
+                    value={
+                      capabilities?.learning?.prompt_injection ? "on" : "off"
+                    }
+                    detail="受预算约束的提示词注入"
+                    tone={
+                      capabilities?.learning?.prompt_injection
+                        ? "ok"
+                        : "neutral"
+                    }
+                  />
+                  <InspectorRow
+                    icon={History}
+                    label="异步摘要"
+                    value={
+                      capabilities?.memory?.summary_enabled ? "on" : "off"
+                    }
+                    detail="滚动会话摘要"
+                    tone={
+                      capabilities?.memory?.summary_enabled ? "ok" : "neutral"
+                    }
+                  />
+                </div>
+              </section>
+            </>
+          ) : null}
+        </div>
+      </aside>
     </div>
   );
 }

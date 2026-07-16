@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Path, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -18,7 +18,10 @@ from uvicorn.logging import AccessFormatter
 
 from backend.src.slothbearflow_backend import build_agent_executor, get_settings
 from backend.src.slothbearflow_backend.agent.conversation_loop import ChatTurnRunner, TurnInput
-from backend.src.slothbearflow_backend.llm import get_llm_model_name
+from backend.src.slothbearflow_backend.llm import (
+    get_llm_model_name,
+    llm_supports_tools,
+)
 from backend.src.slothbearflow_backend.rag.embedding import get_embedding_model_name, get_embedding_provider
 from backend.src.slothbearflow_backend.deps import InMemoryRedis, ping_redis
 from backend.src.slothbearflow_backend.memory.redis_memory import get_redis_session
@@ -175,6 +178,14 @@ class IngestResponse(BaseModel):
     job_id: str
 
 
+class IngestStatusResponse(BaseModel):
+    job_id: str
+    source: str
+    text_length: int
+    status: str
+    error_detail: str = ""
+
+
 @app.get("/")
 def root() -> Dict[str, Any]:
     return {
@@ -221,22 +232,49 @@ def health() -> Dict[str, Any]:
     session_started_at = time.perf_counter()
     logger.info("health session load start")
     payload, client = get_redis_session("health-check", settings=settings)
+    session_backend = "memory" if isinstance(client, InMemoryRedis) else "redis"
+    effective_redis_ok = bool(redis_ok and session_backend == "redis")
+    if not effective_redis_ok and not redis_err:
+        redis_err = "using in-memory fallback"
     logger.info(
         "health session load done in %.3fs backend=%s messages=%s",
         time.perf_counter() - session_started_at,
-        "memory" if isinstance(client, InMemoryRedis) else "redis",
+        session_backend,
         len(payload.get("messages") or []),
     )
 
+    postgres_status = postgres_persistence.get_status(settings)
+    rag_configured = bool(settings.use_rag and not settings.skip_milvus)
+    postgres_required = bool(settings.enable_postgres_persistence)
+    degraded = (
+        not effective_redis_ok
+        or (rag_configured and not bool(vs_status.get("enabled")))
+        or (
+            postgres_required
+            and not bool(postgres_status.get("ready"))
+        )
+    )
+    supports_tools = llm_supports_tools(settings)
+    executor = "basic"
+    if supports_tools:
+        executor = (
+            "explicit_react"
+            if settings.enable_explicit_react_runtime
+            else "tool_calling"
+        )
+
     response = {
+        # `ok` remains the backwards-compatible liveness signal. `status`
+        # communicates whether configured dependencies are fully available.
         "ok": True,
-        "redis": {"ok": redis_ok, "error": redis_err},
+        "status": "degraded" if degraded else "ready",
+        "redis": {"ok": effective_redis_ok, "error": redis_err},
         "session_store": {
-            "backend": "memory" if isinstance(client, InMemoryRedis) else "redis",
+            "backend": session_backend,
             "loaded_messages": len(payload.get("messages") or []),
         },
         "milvus": vs_status,
-        "postgres_persistence": postgres_persistence.get_status(settings),
+        "postgres_persistence": postgres_status,
         "llm": {
             "provider": settings.llm_provider,
             "model": get_llm_model_name(settings),
@@ -246,6 +284,36 @@ def health() -> Dict[str, Any]:
             "model": get_embedding_model_name(settings),
         },
         "ollama_base_url": settings.ollama_base_url,
+        "capabilities": {
+            "agent": {
+                "executor": executor,
+                "tool_calling": supports_tools,
+                "streaming": settings.stream_output,
+                "stream_format": settings.stream_output_format,
+                "structured_output": settings.structured_output,
+            },
+            "security": {
+                "tool_guard_mode": settings.tool_guard_mode,
+                "output_scrubbing": settings.tool_scrub_output,
+                "max_tool_calls_per_turn": settings.max_tool_calls_per_turn,
+                "approval_mode": "headless_auto_deny",
+            },
+            "rag": {
+                "enabled": rag_configured,
+                "available": bool(vs_status.get("enabled")),
+                "hybrid_retrieval": True,
+            },
+            "memory": {
+                "session_backend": session_backend,
+                "window_pairs": settings.memory_window_pairs,
+                "summary_enabled": settings.async_summary_update,
+                "postgres_restore": settings.postgres_restore_on_redis_miss,
+            },
+            "learning": {
+                "background_review": settings.enable_background_review,
+                "prompt_injection": settings.inject_learning_into_prompt,
+            },
+        },
     }
     logger.info("health done in %.3fs", time.perf_counter() - started_at)
     return response
@@ -275,6 +343,22 @@ async def ingest(req: IngestRequest, request: Request) -> IngestResponse:
         settings=settings,
     )
     return IngestResponse(accepted=True, job_id=job_id)
+
+
+@app.get("/ingest/{job_id}", response_model=IngestStatusResponse)
+def ingest_status(
+    job_id: str = Path(..., min_length=1, max_length=128),
+) -> IngestStatusResponse:
+    settings = get_settings()
+    if not postgres_persistence.is_enabled(settings):
+        raise HTTPException(
+            status_code=503,
+            detail="当前配置未启用 ingest 任务状态持久化。",
+        )
+    job = postgres_persistence.get_ingest_job(job_id, settings=settings)
+    if job is None:
+        raise HTTPException(status_code=404, detail="未找到该 ingest 任务。")
+    return IngestStatusResponse(**job)
 
 
 @app.post("/chat", response_model=ChatResponse)
