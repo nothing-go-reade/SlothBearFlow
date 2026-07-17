@@ -33,8 +33,7 @@ def validate_arg(value: Any, c: ArgConstraint) -> Tuple[bool, str]:
             if re.fullmatch(c.regex, str(value)) is None:
                 return False, "argument failed regex allowlist"
         except re.error:
-            # 策略正则本身写错 → 视为不阻断（配置问题不应误伤用户请求）。
-            pass
+            return False, "invalid regex in tool policy"
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if c.min is not None and value < c.min:
@@ -66,8 +65,7 @@ def _check_type(value: Any, type_name: str) -> Tuple[bool, str]:
         )
     if t in ("boolean", "bool"):
         return (isinstance(value, bool), "expected boolean")
-    # 未知类型名 → 不校验（宽松处理未知配置）。
-    return True, ""
+    return False, "unsupported argument type"
 
 
 def _check_path_within(value: str, base: str) -> Tuple[bool, str]:

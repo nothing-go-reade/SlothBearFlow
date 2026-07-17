@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +11,10 @@ class Citation(BaseModel):
     source: str = Field(default="", description="来源标识，如文档名、工具名等")
     excerpt: str = Field(default="", description="可回显给用户的关键片段")
     score: Optional[float] = Field(default=None, description="可选相关度分数")
+    chunk_id: str = Field(default="", description="稳定知识块 ID")
+    retrieval: str = Field(default="", description="召回/融合方式")
+    supported: Optional[bool] = Field(default=None, description="回答是否得到该引用支持")
+    support_score: Optional[float] = Field(default=None, description="引用支持度")
 
 
 class ChatOutput(BaseModel):
@@ -29,3 +33,16 @@ class ChatOutput(BaseModel):
         default_factory=list,
         description="本次回答中实际使用过的工具名",
     )
+
+
+class ToolTraceOutput(BaseModel):
+    call_id: str = ""
+    name: str = ""
+    args: Dict[str, Any] = Field(default_factory=dict)
+    ok: bool = False
+    status: str = ""
+    duration_ms: float = 0.0
+    observation: str = ""
+    error_code: str = ""
+    policy_decision: str = ""
+    provenance: Dict[str, Any] = Field(default_factory=dict)

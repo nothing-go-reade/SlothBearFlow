@@ -1,0 +1,180 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-quality:
+    name: Backend quality (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: python -m pip install --requirement backend/requirements-dev.txt
+
+      - name: Ruff
+        run: python -m ruff check backend/src backend/tests backend/migrations
+
+      - name: Mypy
+        run: python -m mypy
+
+      - name: Render migration SQL
+        env:
+          POSTGRES_DSN: postgresql://postgres:postgres@postgres:5432/slothbearflow
+        run: |
+          python -m alembic -c backend/migrations/alembic.ini upgrade head --sql > /tmp/migration.sql
+          test -s /tmp/migration.sql
+
+      - name: Test with coverage
+        run: >-
+          python -m pytest
+          --cov
+          --cov-config=pyproject.toml
+          --cov-report=term-missing:skip-covered
+          --cov-report=xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm build
+
+  compose-config:
+    name: Validate Compose configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LANGFUSE_POSTGRES_PASSWORD: ci-postgres-password
+      LANGFUSE_SALT: ci-langfuse-salt
+      LANGFUSE_ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      LANGFUSE_CLICKHOUSE_PASSWORD: ci-clickhouse-password
+      LANGFUSE_REDIS_PASSWORD: ci-redis-password
+      LANGFUSE_MINIO_ROOT_PASSWORD: ci-minio-password
+      LANGFUSE_NEXTAUTH_SECRET: ci-nextauth-secret
+      GRAFANA_ADMIN_PASSWORD: ci-grafana-password
+      REDIS_PASSWORD: ci-redis-password
+      POSTGRES_PASSWORD: ci-postgres-password
+      MIGRATION_POSTGRES_DSN: postgresql://migrator:ci-migration-password@postgres:5432/slothbearflow
+      PRODUCTION_POSTGRES_DSN: postgresql://runtime:ci-runtime-password@postgres:5432/slothbearflow
+      MINIO_ROOT_USER: ci-minio-user
+      MINIO_ROOT_PASSWORD: ci-minio-password
+      MILVUS_TOKEN: root:ci-milvus-target-password
+      MILVUS_BOOTSTRAP_TOKEN: root:Milvus
+      AUTH_SECRET: ci-auth-secret-with-at-least-thirty-two-characters
+      AUTH_USERS_JSON: '{"admin":{"password_hash":"pbkdf2_sha256$390000$c2xvdGhiZWFyZmxvdy1jaQ$SQzzn6JzcqgYjSxboxWvj3EHjzgFIOQKu1OKrJGt6bE","tenant_id":"ci","roles":["admin"]}}'
+      METRICS_BEARER_TOKEN: ci-metrics-token-with-32-characters
+      CORS_ORIGINS_JSON: '["https://console.example.test"]'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate application profile
+        run: docker compose -f backend/docker-compose.yml --profile app config --quiet
+
+      - name: Validate production security overlay
+        run: |
+          docker compose \
+            -f backend/docker-compose.yml \
+            -f backend/docker-compose.production.yml \
+            --profile app config > /tmp/production-compose.yml
+          grep -q 'APP_ENV: production' /tmp/production-compose.yml
+          grep -q 'AUTH_REQUIRED: "true"' /tmp/production-compose.yml
+          grep -q 'LLM_HEALTHCHECK_ENABLED: "true"' /tmp/production-compose.yml
+          grep -q 'milvus-auth-init' /tmp/production-compose.yml
+          grep -q 'postgresql://migrator:ci-migration-password@postgres:5432/slothbearflow' /tmp/production-compose.yml
+          grep -q 'postgresql://runtime:ci-runtime-password@postgres:5432/slothbearflow' /tmp/production-compose.yml
+
+      - name: Validate observability profile
+        run: >-
+          docker compose
+          -f backend/docker-compose.yml
+          -f backend/docker-compose.observability.yml
+          --profile app
+          --profile observability
+          config --quiet
+
+  container-build:
+    name: Build ${{ matrix.name }} image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [backend-quality, frontend-build, compose-config]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            dockerfile: backend/Dockerfile
+          - name: frontend
+            dockerfile: frontend/Dockerfile
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          tags: slothbearflow-${{ matrix.name }}:ci
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

@@ -1,0 +1,10 @@
+services:
+  migrate:
+    env_file:
+      - path: .env.e2e.local
+        required: true
+
+  backend:
+    env_file:
+      - path: .env.e2e.local
+        required: true

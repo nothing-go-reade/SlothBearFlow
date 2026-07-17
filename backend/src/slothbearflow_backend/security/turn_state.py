@@ -3,22 +3,47 @@ from __future__ import annotations
 import contextvars
 from typing import Dict, Optional, Tuple
 
+from backend.src.slothbearflow_backend.security.execution import CancellationToken
+
 # 每回合工具调用计数。用 contextvars 而非 threading.local：
 # - 能穿透 asyncio.to_thread（conversation_loop 在线程里跑 executor.invoke）；
 # - 每个请求协程持有独立 context → 绝不跨请求泄漏（worker 线程复用也安全）。
 _turn_counts: contextvars.ContextVar[Optional[Dict[str, int]]] = contextvars.ContextVar(
     "tool_turn_counts", default=None
 )
+_turn_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "tool_turn_id", default=""
+)
+_turn_cancellation: contextvars.ContextVar[Optional[CancellationToken]] = (
+    contextvars.ContextVar("tool_turn_cancellation", default=None)
+)
 
 
-def begin_turn() -> None:
+def begin_turn(turn_id: str = "") -> None:
     """回合开始时重置计数（ChatTurnRunner.prepare 调用）。"""
     _turn_counts.set({})
+    _turn_id.set(str(turn_id or ""))
+    _turn_cancellation.set(CancellationToken())
 
 
 def end_turn() -> None:
     """回合结束清理（ChatTurnRunner._finalize 的 finally 调用）。"""
     _turn_counts.set(None)
+    _turn_id.set("")
+    _turn_cancellation.set(None)
+
+
+def current_turn_id() -> str:
+    return _turn_id.get()
+
+
+def current_turn_cancellation_token() -> Optional[CancellationToken]:
+    return _turn_cancellation.get()
+
+
+def cancel_turn(reason: str = "agent turn cancelled") -> bool:
+    token = _turn_cancellation.get()
+    return token.cancel(reason) if token is not None else False
 
 
 def current_counts() -> Optional[Dict[str, int]]:

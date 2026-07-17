@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Callable, Optional
+
 from langchain_core.tools import tool
 
 from backend.src.slothbearflow_backend.learning.schema import (
@@ -13,7 +15,16 @@ from backend.src.slothbearflow_backend.learning.store import LearningStore
 REVIEW_TOOL_WHITELIST = {"save_memory", "save_skill"}
 
 
-def build_review_tools(store: LearningStore):
+def build_review_tools(
+    store: LearningStore,
+    *,
+    source_tenant_id: str = "",
+    source_user_id: str = "",
+    source_session_id: str = "",
+    source_turn_id: str = "",
+    source_generation: int = 0,
+    write_guard: Optional[Callable[[], bool]] = None,
+):
     """构建后台复盘写工具：仅 save_memory / save_skill，内部委托 LearningStore。
 
     供支持工具调用的模型在 ExplicitReActRuntime 内调用；非白名单工具会被
@@ -32,7 +43,13 @@ def build_review_tools(store: LearningStore):
                 description=description,
                 type=normalize_memory_type(type),
                 body=body,
-            )
+                source_tenant_id=source_tenant_id,
+                source_user_id=source_user_id,
+                source_session_id=source_session_id,
+                source_turn_id=source_turn_id,
+                source_generation=source_generation,
+            ),
+            write_guard=write_guard,
         )
         return f"saved memory: {path.name}" if path else "memory rejected"
 
@@ -42,7 +59,19 @@ def build_review_tools(store: LearningStore):
 
         name: short kebab-case slug; trigger: when to apply it; body: the technique/steps.
         """
-        path = store.upsert_skill(SkillItem(name=name, trigger=trigger, body=body))
+        path = store.upsert_skill(
+            SkillItem(
+                name=name,
+                trigger=trigger,
+                body=body,
+                source_tenant_id=source_tenant_id,
+                source_user_id=source_user_id,
+                source_session_id=source_session_id,
+                source_turn_id=source_turn_id,
+                source_generation=source_generation,
+            ),
+            write_guard=write_guard,
+        )
         return f"saved skill: {path.name}" if path else "skill rejected"
 
     return [save_memory, save_skill]

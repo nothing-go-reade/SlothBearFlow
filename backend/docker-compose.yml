@@ -1,22 +1,72 @@
-# 开发用：Redis + Milvus Standalone（etcd + minio + milvus）+ PostgreSQL
-# 启动：docker compose up -d
-# Milvus 默认端口 19530；Redis 6379；PostgreSQL 5432
+x-backend-build: &backend-build
+  context: ..
+  dockerfile: backend/Dockerfile
+
+x-backend-env-files: &backend-env-files
+  - path: ../.env
+    required: false
+  - path: .env
+    required: false
+
+x-backend-environment: &backend-environment
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  MILVUS_URI: http://milvus:19530
+  MILVUS_TOKEN: ${MILVUS_TOKEN:-}
+  POSTGRES_DSN: ${COMPOSE_POSTGRES_DSN:-postgresql://postgres:postgres@postgres:5432/slothbearflow}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+  LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+  OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-true}
+  PROMETHEUS_ENABLED: ${PROMETHEUS_ENABLED:-true}
+  METRICS_BEARER_TOKEN: ${METRICS_BEARER_TOKEN:-}
+  LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
+  LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+  LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+  TRACE_INCLUDE_CONTENT: ${TRACE_INCLUDE_CONTENT:-false}
+  LOG_DIR: /app/logs
+  REVIEW_BASE_DIR: /app/data/agent_learning
 
 services:
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -ec
+      - |
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+        fi
+        exec redis-server --appendonly yes
     ports:
-      - "6379:6379"
-    command: ["redis-server", "--appendonly", "yes"]
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          if [ -n "$$REDIS_PASSWORD" ]; then
+            redis-cli -a "$$REDIS_PASSWORD" ping;
+          else
+            redis-cli ping;
+          fi
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: slothbearflow
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -27,6 +77,7 @@ services:
 
   etcd:
     image: quay.io/coreos/etcd:v3.5.5
+    restart: unless-stopped
     environment:
       ETCD_AUTO_COMPACTION_MODE: revision
       ETCD_AUTO_COMPACTION_RETENTION: "1000"
@@ -34,39 +85,133 @@ services:
       ETCD_SNAPSHOT_COUNT: "50000"
     volumes:
       - etcd_data:/etcd
-    command: >
+    command: >-
       etcd -advertise-client-urls=http://127.0.0.1:2379
       -listen-client-urls http://0.0.0.0:2379
       --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   minio:
     image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    restart: unless-stopped
     environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - minio_data:/minio_data
-    command: minio server /minio_data
+    command: minio server /minio_data --console-address ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   milvus:
     image: milvusdb/milvus:v2.4.4
+    restart: unless-stopped
     command: ["milvus", "run", "standalone"]
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - milvus_data:/var/lib/milvus
     ports:
-      - "19530:19530"
-      - "9091:9091"
+      - "127.0.0.1:${MILVUS_PORT:-19530}:19530"
+      - "127.0.0.1:${MILVUS_METRICS_PORT:-9091}:9091"
     depends_on:
-      - etcd
-      - minio
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9091/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  milvus-auth-init:
+    profiles: ["milvus-auth"]
+    image: slothbearflow-backend:${SLOTHBEARFLOW_IMAGE_TAG:-local}
+    build: *backend-build
+    environment:
+      MILVUS_URI: http://milvus:19530
+      MILVUS_TOKEN: ${MILVUS_TOKEN:-}
+      MILVUS_BOOTSTRAP_TOKEN: ${MILVUS_BOOTSTRAP_TOKEN:-}
+      MILVUS_AUTH_INIT_TIMEOUT_SEC: ${MILVUS_AUTH_INIT_TIMEOUT_SEC:-10}
+    command: ["python", "backend/scripts/init_milvus_auth.py"]
+    depends_on:
+      milvus:
+        condition: service_healthy
+    restart: "no"
+
+  migrate:
+    profiles: ["app"]
+    image: slothbearflow-backend:${SLOTHBEARFLOW_IMAGE_TAG:-local}
+    build: *backend-build
+    env_file: *backend-env-files
+    environment: *backend-environment
+    command:
+      - python
+      - -m
+      - alembic
+      - -c
+      - backend/migrations/alembic.ini
+      - upgrade
+      - head
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    profiles: ["app"]
+    image: slothbearflow-backend:${SLOTHBEARFLOW_IMAGE_TAG:-local}
+    build: *backend-build
+    restart: unless-stopped
+    env_file: *backend-env-files
+    environment: *backend-environment
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - backend_logs:/app/logs
+      - backend_learning:/app/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+
+  frontend:
+    profiles: ["app"]
+    image: slothbearflow-frontend:${SLOTHBEARFLOW_IMAGE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-5173}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
 
 volumes:
+  backend_logs: {}
+  backend_learning: {}
+  redis_data: {}
   postgres_data: {}
   etcd_data: {}
   minio_data: {}

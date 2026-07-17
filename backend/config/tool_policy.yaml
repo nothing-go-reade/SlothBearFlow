@@ -12,14 +12,17 @@ tools:
   get_current_time:
     allow: true
     class: read
+    retry_safe: true
 
   get_session_context:
     allow: true
     class: read
+    retry_safe: true
 
   get_weather:
     allow: true
     class: read
+    retry_safe: true
     max_calls_per_turn: 3
     args:
       city:
@@ -29,6 +32,7 @@ tools:
   search_knowledge:
     allow: true
     class: read
+    retry_safe: true
     max_calls_per_turn: 4
     args:
       query:

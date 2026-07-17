@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Dict, Optional
+from urllib.parse import quote
+
+import httpx
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -29,6 +32,57 @@ def llm_supports_tools(settings: Optional[Settings] = None) -> bool:
     if provider == "openai":
         return bool(settings.openai_model_supports_tools)
     return bool(settings.ollama_model_supports_tools)
+
+
+def get_llm_status(settings: Optional[Settings] = None) -> Dict[str, Any]:
+    settings = settings or get_settings()
+    provider = _normalize_provider(settings)
+    model = get_llm_model_name(settings)
+    status: Dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "checked": bool(settings.llm_healthcheck_enabled),
+    }
+    if not settings.llm_healthcheck_enabled:
+        return status | {"ready": None, "reason": "LLM_HEALTHCHECK_ENABLED=false"}
+
+    timeout = max(0.1, float(settings.llm_healthcheck_timeout_sec))
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+            if provider == "ollama":
+                response = client.get(settings.ollama_base_url.rstrip("/") + "/api/tags")
+                response.raise_for_status()
+                rows = response.json().get("models") or []
+                available = {
+                    str(row.get("name") or row.get("model") or "")
+                    for row in rows
+                    if isinstance(row, dict)
+                }
+                if model not in available:
+                    return status | {
+                        "ready": False,
+                        "reason": f"configured Ollama model is not installed: {model}",
+                    }
+                return status | {"ready": True}
+
+            if provider == "openai":
+                base_url = (
+                    str(settings.openai_base_url).rstrip("/")
+                    or "https://api.openai.com/v1"
+                )
+                headers = {}
+                if str(settings.openai_api_key).strip():
+                    headers["Authorization"] = "Bearer " + str(settings.openai_api_key).strip()
+                response = client.get(
+                    base_url + "/models/" + quote(model, safe=""),
+                    headers=headers,
+                )
+                response.raise_for_status()
+                return status | {"ready": True}
+
+            return status | {"ready": False, "reason": f"unsupported provider: {provider}"}
+    except Exception as exc:  # noqa: BLE001
+        return status | {"ready": False, "reason": str(exc)}
 
 
 def build_openai_chat_model(**kwargs: object) -> BaseChatModel:
@@ -128,6 +182,8 @@ def get_chat_llm(
                 ),
                 "model_kwargs": model_kwargs,
                 "extra_body": extra_body,
+                "timeout": settings.agent_timeout_sec,
+                "max_retries": 0,
             }
         )
         return build_openai_chat_model(**kwargs)
@@ -137,6 +193,7 @@ def get_chat_llm(
             model=model_name,
             base_url=settings.ollama_base_url,
             temperature=resolved_temperature,
+            client_kwargs={"timeout": settings.agent_timeout_sec},
         )
 
     raise ValueError(f"Unsupported llm provider: {settings.llm_provider}")

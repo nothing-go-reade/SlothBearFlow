@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,11 +51,29 @@ class LearningIndex:
                         rel_path TEXT NOT NULL DEFAULT '',
                         mtime REAL NOT NULL DEFAULT 0,
                         body TEXT NOT NULL DEFAULT '',
+                        source_tenant_id TEXT NOT NULL DEFAULT '',
+                        source_user_id TEXT NOT NULL DEFAULT '',
+                        source_session_id TEXT NOT NULL DEFAULT '',
+                        source_turn_id TEXT NOT NULL DEFAULT '',
+                        source_generation INTEGER NOT NULL DEFAULT 0,
                         updated_at REAL NOT NULL DEFAULT 0,
                         PRIMARY KEY (kind, name)
                     )
                     """
                 )
+                columns = {
+                    str(row[1])
+                    for row in conn.execute("PRAGMA table_info(entries)").fetchall()
+                }
+                for name, definition in (
+                    ("source_tenant_id", "TEXT NOT NULL DEFAULT ''"),
+                    ("source_user_id", "TEXT NOT NULL DEFAULT ''"),
+                    ("source_session_id", "TEXT NOT NULL DEFAULT ''"),
+                    ("source_turn_id", "TEXT NOT NULL DEFAULT ''"),
+                    ("source_generation", "INTEGER NOT NULL DEFAULT 0"),
+                ):
+                    if name not in columns:
+                        conn.execute(f"ALTER TABLE entries ADD COLUMN {name} {definition}")
             self._ready = True
         except Exception:
             logger.exception("LearningIndex 初始化失败，索引降级关闭: %s", self._db_path)
@@ -77,16 +94,23 @@ class LearningIndex:
         rel_path: str = "",
         mtime: float = 0.0,
         body: str = "",
-    ) -> None:
+        source_tenant_id: str = "",
+        source_user_id: str = "",
+        source_session_id: str = "",
+        source_turn_id: str = "",
+        source_generation: int = 0,
+    ) -> bool:
         if not self._ready:
-            return
+            return True
         try:
             with self._connect() as conn:
                 conn.execute(
                     """
                     INSERT INTO entries (
-                        kind, name, type, description, trigger, rel_path, mtime, body, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        kind, name, type, description, trigger, rel_path, mtime, body,
+                        source_tenant_id, source_user_id, source_session_id,
+                        source_turn_id, source_generation, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(kind, name) DO UPDATE SET
                         type=excluded.type,
                         description=excluded.description,
@@ -94,6 +118,11 @@ class LearningIndex:
                         rel_path=excluded.rel_path,
                         mtime=excluded.mtime,
                         body=excluded.body,
+                        source_tenant_id=excluded.source_tenant_id,
+                        source_user_id=excluded.source_user_id,
+                        source_session_id=excluded.source_session_id,
+                        source_turn_id=excluded.source_turn_id,
+                        source_generation=excluded.source_generation,
                         updated_at=excluded.updated_at
                     """,
                     (
@@ -105,11 +134,19 @@ class LearningIndex:
                         rel_path,
                         float(mtime),
                         body,
+                        source_tenant_id,
+                        source_user_id,
+                        source_session_id,
+                        source_turn_id,
+                        max(0, int(source_generation)),
                         float(mtime),
                     ),
                 )
+            return True
         except Exception:
             logger.exception("LearningIndex.upsert 失败: kind=%s name=%s", kind, name)
+            self._ready = False
+            return False
 
     def get(self, kind: str, name: str) -> Optional[Dict[str, Any]]:
         if not self._ready:
@@ -169,16 +206,19 @@ class LearningIndex:
         relevant = [r for r in scored if score(r)[0] > 0]
         return relevant[:limit]
 
-    def delete(self, kind: str, name: str) -> None:
+    def delete(self, kind: str, name: str) -> bool:
         if not self._ready:
-            return
+            return True
         try:
             with self._connect() as conn:
                 conn.execute(
                     "DELETE FROM entries WHERE kind = ? AND name = ?", (kind, name)
                 )
+            return True
         except Exception:
             logger.exception("LearningIndex.delete 失败: kind=%s name=%s", kind, name)
+            self._ready = False
+            return False
 
     def reindex_from_disk(self, base_dir: Any) -> int:
         """扫描 base_dir/{memory,skills}/*.md 全量重建索引；返回索引条数。"""
@@ -197,17 +237,23 @@ class LearningIndex:
                     meta, body = _parse_markdown(md)
                     self.upsert(
                         kind=kind,
-                        name=meta.get("name") or md.stem,
+                        name=md.stem,
                         type_=meta.get("type", ""),
                         description=meta.get("description", ""),
                         trigger=meta.get("trigger", ""),
                         rel_path=f"{kind}/{md.name}",
                         mtime=md.stat().st_mtime,
                         body=body,
+                        source_tenant_id=meta.get("source_tenant_id", ""),
+                        source_user_id=meta.get("source_user_id", ""),
+                        source_session_id=meta.get("source_session_id", ""),
+                        source_turn_id=meta.get("source_turn_id", ""),
+                        source_generation=int(meta.get("source_generation") or 0),
                     )
                     count += 1
         except Exception:
             logger.exception("LearningIndex.reindex_from_disk 失败")
+            self._ready = False
         return count
 
 
@@ -235,8 +281,15 @@ def _parse_markdown(path: Path) -> tuple:
                     key, _, value = line.strip().partition(":")
                     key = key.strip()
                     value = value.strip()
-                    if in_metadata and key == "type":
-                        meta["type"] = value
+                    if in_metadata and key in {
+                        "type",
+                        "source_tenant_id",
+                        "source_user_id",
+                        "source_session_id",
+                        "source_turn_id",
+                        "source_generation",
+                    }:
+                        meta[key] = value
                     elif key in ("name", "description", "trigger", "type"):
                         meta[key] = value
                     if not line.startswith(" "):

@@ -1,200 +1,190 @@
 # SlothBearFlow
 
-A monorepo-ready AI agent service scaffold.
+SlothBearFlow 是一个本地优先、可生产加固的单 Agent 应用。项目把 Agent 执行、
+Tool/Function Call、RAG、MCP Client、分层记忆、评估与可观测性、安全护栏以及
+React 管理控制台整合在同一个仓库中。
 
-Current status:
-- `backend/` is fully runnable.
-- `frontend/` is a placeholder for future UI work.
+当前状态：后端与前端均可运行；Multi-Agent 产品能力按当前路线暂缓。
 
-## Repository Layout
+## 核心能力
+
+- Agent：Basic、LangChain Tool Calling、Explicit ReAct 三条执行路径，共用统一结果、
+  总 deadline、停止原因、工具轨迹和持久化收尾。
+- Tool/Function Call：严格 schema、默认拒绝、参数约束、调用配额、超时、有限重试、
+  熔断、幂等键、一次性人工审批和输出脱敏。
+- RAG：结构化 Markdown 切分、Embedding、Milvus、向量 + BM25 混合检索、RRF、
+  rerank、阈值过滤、上下文预算、ACL、Manifest、引用和 groundedness 校验。
+- MCP：Streamable HTTP Client、协议协商、分页发现、租户/用户/作用域隔离缓存、
+  SSRF 防护、凭据隔离、绝对 deadline 和工具调用幂等元数据。
+- 记忆：Redis 短期窗口、异步摘要、PostgreSQL 持久化与恢复、删除 tombstone、
+  PII/密钥脱敏和可选 Background Reflection。
+- 可观测性：本地 Trace Store、Agent/RAG/LLM/Memory/PostgreSQL spans、Langfuse
+  bridge、自托管 Compose、Prometheus/Grafana 配置和防篡改审计链。
+- 工程与安全：HttpOnly Cookie 登录、JWT、RBAC、租户隔离、限流、并发/请求大小
+  限制、CORS、本地匿名边界、命令/路径/网络护栏、Alembic、CI 和非 root 镜像。
+- 前端：React + Umi + TypeScript 三栏工作台，支持 SSE 聊天、知识入库、记忆删除、
+  审批、审计和 Trace 查看，并适配桌面、390px 与 320px。
+
+## 目录
 
 ```text
 .
 |-- backend/
-|   |-- src/
-|   |   `-- slothbearflow_backend/
-|   |       |-- agent/
-|   |       |-- memory/
-|   |       |-- persistence/
-|   |       |-- rag/
-|   |       |-- tools/
-|   |       |-- worker/
-|   |       `-- main.py
-|   |-- tests/
-|   |-- .env.example
-|   |-- docker-compose.yml
-|   |-- local_run.py
-|   |-- pytest.ini
-|   `-- requirements.txt
-|-- frontend/
-|   `-- .gitkeep
-|-- LICENSE
-`-- README.md
+|   |-- config/                    # Tool Guard 策略
+|   |-- migrations/                # Alembic migrations
+|   |-- scripts/                   # 密码、评估、Milvus 鉴权初始化脚本
+|   |-- src/slothbearflow_backend/
+|   |   |-- agent/                 # Agent 执行与统一结果
+|   |   |-- evaluation/            # 版本化评估数据与评估器
+|   |   |-- learning/              # Background Reflection
+|   |   |-- mcp/                   # MCP Client/Manager
+|   |   |-- memory/                # Redis/摘要/隐私
+|   |   |-- observability/         # Trace、Langfuse、metrics facade
+|   |   |-- persistence/           # PostgreSQL
+|   |   |-- rag/                   # Chunk、Milvus、rerank、citation、ACL
+|   |   |-- security/              # Auth、审批、审计和执行护栏
+|   |   |-- tools/                 # 内置工具与安全包装
+|   |   `-- main.py                # FastAPI 入口
+|   `-- tests/
+|-- frontend/                      # React + Umi 控制台
+|-- docs/                          # 架构、优化、审查和验收文档
+|-- .github/workflows/ci.yml
+`-- pyproject.toml
 ```
 
-## Backend Quick Start
+## 本地启动
 
-### 1) Install dependencies
+### 1. Python 环境
 
-```bash
-./.venv/bin/pip install -r backend/requirements.txt
-```
-
-### 2) Prepare environment variables
+目标运行时为 Python 3.12。
 
 ```bash
+python3.12 -m venv .venv
+./.venv/bin/python -m pip install -r backend/requirements.txt
 cp backend/.env.example .env
 ```
 
-### 3) Start infrastructure (optional for full stack)
+根据本机模型修改 `.env` 中的 `OLLAMA_MODEL`、`OLLAMA_EMBED_MODEL` 等配置。
+
+### 2. 基础依赖
+
+```bash
+docker compose -f backend/docker-compose.yml up -d redis postgres etcd minio milvus
+```
+
+### 3. 数据库迁移
+
+首次生产式运行建议执行 Alembic；本地环境仍保留兼容性的 runtime schema 初始化。
+
+```bash
+./.venv/bin/python -m alembic \
+  -c backend/migrations/alembic.ini upgrade head
+```
+
+### 4. 后端
+
+```bash
+./.venv/bin/python -m uvicorn \
+  backend.src.slothbearflow_backend.main:app \
+  --host 127.0.0.1 --port 8000 --no-proxy-headers
+```
+
+- API 文档：`http://127.0.0.1:8000/docs`
+- Liveness：`http://127.0.0.1:8000/health`
+- Readiness：`http://127.0.0.1:8000/ready`
+
+### 5. 前端
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm dev --port 8001
+```
+
+打开 `http://localhost:8001`。开发代理会把 `/api` 转发到后端 `8000` 端口。
+
+## Docker 运行
+
+仅启动基础设施：
 
 ```bash
 docker compose -f backend/docker-compose.yml up -d
 ```
 
-### 4) Run API server
+构建并启动完整应用：
 
 ```bash
-./.venv/bin/python -m uvicorn backend.src.slothbearflow_backend.main:app --host 0.0.0.0 --port 8000
+docker compose -f backend/docker-compose.yml --profile app up -d --build
 ```
 
-Then open:
-- API docs: `http://127.0.0.1:8000/docs`
-- Health check: `http://127.0.0.1:8000/health`
-
-## Backend Features
-
-- `POST /chat`
-  Unified chat entrypoint with short-term memory, summary memory, and tool calling. Supports plain output, structured output, and streaming.
-- `POST /ingest`
-  Splits plain text and writes chunks to Milvus for RAG retrieval.
-- `GET /health`
-  Reports Redis, Milvus, session store, LLM, and embedding status.
-
-## Built-in Tools
-
-- `get_current_time`
-- `get_weather`
-- `get_session_context`
-- `search_knowledge` (enabled when RAG is available)
-
-## Backend Configuration
-
-Main flags (via `.env`):
-- `LLM_PROVIDER=ollama|openai`
-- `USE_RAG=false|true`
-- `SKIP_MILVUS=true|false`
-- `STRUCTURED_OUTPUT=false|true`
-- `STREAM_OUTPUT=false|true`
-- `STREAM_OUTPUT_FORMAT=plain|sse`
-- `ENABLE_POSTGRES_PERSISTENCE=false|true`
-- `POSTGRES_RESTORE_ON_REDIS_MISS=false|true`
-- `POSTGRES_RESTORE_TURN_LIMIT=20`
-- `POSTGRES_RESTORE_REDIS_TTL_SEC=604800`
-- `ENABLE_EXPLICIT_REACT_RUNTIME=false|true`
-- `REACT_MAX_STEPS=4`
-- `REACT_TOOL_TIMEOUT_SEC=15`
-- `REACT_STREAM_THOUGHTS=false|true`
-- `ENABLE_BACKGROUND_REVIEW=false|true`
-- `REVIEW_MEMORY_INTERVAL=3`
-- `REVIEW_SKILLS_INTERVAL=5`
-- `REVIEW_BASE_DIR=agent_learning`
-- `REVIEW_MAX_ITEMS=5`
-- `REVIEW_MODEL=` (empty → reuse main LLM)
-- `REVIEW_FORCE_STRUCTURED=false|true`
-- `REVIEW_TOOL_TRACE=false|true`
-- `INJECT_LEARNING_INTO_PROMPT=false|true`
-- `LEARNING_PROMPT_BUDGET_CHARS=1200`
-- `TOOL_GUARD_MODE=enforce|log|off` (function-calling security; default enforce)
-- `TOOL_POLICY_FILE=backend/config/tool_policy.yaml`
-- `MAX_TOOL_CALLS_PER_TURN=8`
-- `TOOL_SCRUB_OUTPUT=true|false`
-
-ReAct runtime notes:
-- With `ENABLE_EXPLICIT_REACT_RUNTIME=false` (default), `/chat` keeps current LangChain AgentExecutor behavior.
-- With `ENABLE_EXPLICIT_REACT_RUNTIME=true`, `/chat` uses an explicit bounded ReAct loop while keeping response schema unchanged.
-
-## Background Review (Memory / Skills self-learning)
-
-Hermes-style background reflection. After the main answer is delivered, the
-turn orchestration layer (`agent/conversation_loop.py`, `ChatTurnRunner`) may
-enqueue a `"review"` job on the existing async worker. A restricted review
-agent then replays a snapshot of the turn and distills:
-
-- **Memory** — durable user preferences / identity / how-they-want-the-agent-to-work
-- **Skills** — reusable task techniques (user corrections to format/tone/workflow are a first-class skill signal)
-
-Storage: Markdown files are the **source of truth** (`agent_learning/memory/*.md`,
-`agent_learning/skills/*.md`); a derived `index.sqlite` provides dedup + relevance
-selection and can be fully rebuilt from disk. With `ENABLE_BACKGROUND_REVIEW=true`,
-review runs every `REVIEW_MEMORY_INTERVAL` / `REVIEW_SKILLS_INTERVAL` turns (nudge cadence).
-
-Write path is auto-selected by model capability:
-- tool-capable models → Hermes-style `save_memory` / `save_skill` tool calls gated by a thread-local whitelist (only those tools execute);
-- otherwise (e.g. `deepseek-r1:7b`) → structured-output JSON written by backend code.
-
-Isolation guarantees: the review never writes the Redis session, never appends to
-conversation history, and only writes through the learning store — so the main
-session and its history stay clean.
-
-Read-back (closing the loop) is opt-in via `INJECT_LEARNING_INTO_PROMPT=true`:
-relevant memory/skills are injected (bounded by `LEARNING_PROMPT_BUDGET_CHARS`)
-into the next turn's system prompt. Note this changes the system prompt across
-turns and can reduce provider prefix-cache hits; the injected block deliberately
-omits volatile fields to stay byte-stable when the learning set is unchanged.
-
-See `backend/.env.example` for full options.
-
-## Tool Guard (function-calling security)
-
-Config-file-driven security layer for tool/function calling, aligned with
-**OWASP LLM Top 10 2025 · LLM08 Excessive Agency**. Enforced uniformly across
-both executor paths (LangChain `AgentExecutor` and `ExplicitReActRuntime`) via a
-`BaseTool` wrapper — both paths converge on `BaseTool._run`, so wrapping there
-covers each while keeping the tool's function-calling schema byte-identical.
-
-Policy lives in `backend/config/tool_policy.yaml` (loaded once at startup; if the
-file is missing/unparseable the code falls back to a built-in default that allows
-the current read-only tools and denies unknown ones). Per tool you can declare:
-`allow`, `class: read|write`, `requires_approval`, `max_calls_per_turn`, and
-per-argument constraints (`type`/`max_len`/`enum`/`regex`/`min`/`max`/`path_within`).
-A global `default_action: deny` blocks any tool not in the allowlist.
-
-Coverage (OWASP LLM08 mitigations):
-- **Allowlist / least privilege** — disallowed tools are filtered before the model sees them.
-- **Untrusted-argument validation** — LLM-supplied args are validated against the policy (allowlist-style).
-- **Per-turn quota** — global + per-tool call caps (via `contextvars`, isolated per request).
-- **Dangerous-action gate** — `requires_approval` tools are auto-denied in this headless service.
-- **Output scrubbing** — tool observations are redacted for secrets/keys before returning to the model.
-
-Modes: `enforce` (default; filter + block), `log` (observe & log violations,
-don't block — safe rollout), `off` (pure passthrough, zero behavior change).
-Defaults are chosen so the current four read-only tools behave exactly as before.
-The background review's own tool whitelist is preserved and takes precedence over
-the policy file.
-
-See `backend/config/tool_policy.yaml` and `backend/.env.example` for full options.
-
-## Testing
+生产覆盖文件会强制登录、非默认密码、完整 PostgreSQL DSN、Milvus 鉴权初始化、
+LLM 探针、受保护 metrics、严格 CORS 和关闭 API 文档：
 
 ```bash
-./.venv/bin/python -m pytest -q backend/tests
+docker compose \
+  -f backend/docker-compose.yml \
+  -f backend/docker-compose.production.yml \
+  --profile app up -d --build
 ```
 
-## Local LLM Probe
+生产环境需显式注入 CRUD-only 的 `PRODUCTION_POSTGRES_DSN`、仅供迁移任务使用的
+`MIGRATION_POSTGRES_DSN`、`MILVUS_TOKEN`、
+`MILVUS_BOOTSTRAP_TOKEN`、`REDIS_PASSWORD`、`AUTH_SECRET`、`AUTH_USERS_JSON`
+等私密配置；生产 `REDIS_PASSWORD` 至少 12 个字符。
+不要提交真实 `.env`。
+
+## 可观测性
+
+生成本地私密配置后，可启动 Langfuse、Prometheus 与 Grafana：
 
 ```bash
-./.venv/bin/python backend/local_run.py
+./.venv/bin/python backend/scripts/generate_observability_env.py
+docker compose \
+  --env-file backend/.env.observability \
+  -f backend/docker-compose.yml \
+  -f backend/docker-compose.observability.yml \
+  --profile observability up -d
 ```
 
-## Frontend
+即使未启动 Langfuse，本地 Trace Store 也会保留最近 Trace，可在前端“观测”面板查看。
 
-`frontend/` is a React + Umi + TypeScript console for calling the backend API.
+## 主要 API
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| `GET` | `/health` | 浅 liveness；staging/production 不访问外部依赖 |
+| `GET` | `/ready` | 最小化部署 readiness（依赖降级时返回 503） |
+| `GET` | `/runtime/status` | 鉴权后的完整依赖、能力和降级状态 |
+| `POST` | `/auth/login` | 建立 HttpOnly Cookie 会话 |
+| `POST` | `/auth/logout` | 清理服务端登录态 Cookie |
+| `POST` | `/chat` | Agent 对话，支持 SSE |
+| `POST` | `/ingest` | 创建持久化知识入库任务 |
+| `GET` | `/ingest/{job_id}` | 查询入库任务状态 |
+| `GET` | `/knowledge/documents` | 查询当前租户可见 Manifest |
+| `GET` | `/memory/{session_id}` | 查询会话记忆 |
+| `DELETE` | `/memory/{session_id}` | 删除会话并写 tombstone |
+| `GET` | `/security/approvals` | 查询工具审批 |
+| `POST` | `/security/approvals/{id}` | 同意或拒绝一次性审批 |
+| `GET` | `/security/audit` | 查询租户审计事件并验证哈希链 |
+| `GET` | `/observability/traces` | 查询本地 Trace |
+| `GET` | `/metrics` | Prometheus 指标（可配置 Bearer Token） |
+
+## 质量门禁
 
 ```bash
-cd frontend
-pnpm install
-pnpm dev
+./.venv/bin/python -m pytest -q
+python3.12 -m compileall -q backend/src backend/tests backend/migrations backend/scripts
+ruff check backend/src backend/tests backend/migrations backend/scripts
+cd frontend && pnpm build
 ```
 
-Then open `http://127.0.0.1:5173`. The local console calls the FastAPI backend directly at `http://127.0.0.1:8000` so Server-Sent Events can stream reliably in development.
+CI 还会执行 mypy、coverage、Alembic SQL 渲染、Compose 校验和前后端镜像构建。
+
+## 文档
+
+- [全面优化实施与验收报告](docs/SlothBearFlow-全面优化实施与验收报告.md)
+- [Agent 全面优化清单](docs/SlothBearFlow-Agent全面优化清单.md)
+- [Agent 历史能力基线](docs/SlothBearFlow-Agent能力全景梳理.md)
+- [工程化与安全护栏方案](docs/SlothBearFlow-工程化与安全护栏优化方案.md)
+- [评估与可观测性方案](docs/SlothBearFlow-评估与可观测性-Langfuse优化方案.md)
+- [Multi-Agent 未来方案](docs/SlothBearFlow-Multi-Agent未来优化方案.md)

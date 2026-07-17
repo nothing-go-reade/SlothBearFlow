@@ -6,6 +6,8 @@ from typing import Any, Iterable, Optional
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
+from backend.src.slothbearflow_backend.agent.content import extract_model_text
+
 
 @dataclass
 class ToolCallRecord:
@@ -28,6 +30,7 @@ class ReActRuntimeState:
     stop_reason: str = ""
     tools_used: list[str] = field(default_factory=list)
     tool_trace: list = field(default_factory=list)
+    call_fingerprints: set[str] = field(default_factory=set)
 
 
 class ExplicitReActRuntime:
@@ -37,11 +40,16 @@ class ExplicitReActRuntime:
         llm: Any,
         tools: Iterable[Any],
         max_steps: int = 4,
+        max_tool_calls: Optional[int] = None,
     ) -> None:
         self._llm = llm
         self._tools = list(tools)
         self._tool_map = {tool.name: tool for tool in self._tools}
         self._max_steps = max(1, int(max_steps))
+        self._max_tool_calls = max(
+            1,
+            int(max_tool_calls if max_tool_calls is not None else max_steps),
+        )
 
     def _build_messages(self, payload: dict[str, Any]) -> list[BaseMessage]:
         messages: list[BaseMessage] = []
@@ -54,12 +62,7 @@ class ExplicitReActRuntime:
         return messages
 
     def _extract_text(self, ai_msg: AIMessage) -> str:
-        content = ai_msg.content
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return "".join(part if isinstance(part, str) else str(part) for part in content)
-        return str(content or "")
+        return extract_model_text(ai_msg)
 
     def _normalize_tool_call(self, raw: dict[str, Any], index: int) -> ToolCallRecord:
         return ToolCallRecord(
@@ -103,8 +106,14 @@ class ExplicitReActRuntime:
                 call_id=call.call_id,
                 name=call.name,
                 ok=False,
-                content=f"Tool `{call.name}` failed: {exc}",
+                content=f"Tool `{call.name}` failed safely ({type(exc).__name__}).",
             )
+
+    def _call_fingerprint(self, call: ToolCallRecord) -> str:
+        return "%s:%s" % (
+            call.name,
+            json.dumps(call.args, sort_keys=True, ensure_ascii=False, default=str),
+        )
 
     def _run(self, payload: dict[str, Any]) -> tuple[str, ReActRuntimeState]:
         state = ReActRuntimeState()
@@ -128,8 +137,25 @@ class ExplicitReActRuntime:
                 return self._extract_text(ai_msg).strip(), state
 
             for idx, raw_call in enumerate(tool_calls, start=1):
+                if len(state.tool_trace) >= self._max_tool_calls:
+                    state.stop_reason = "max_tool_calls"
+                    return (
+                        "I stopped because the tool-call limit for this turn was reached.",
+                        state,
+                    )
                 call = self._normalize_tool_call(raw_call, idx)
-                result = self._invoke_tool(call)
+                fingerprint = self._call_fingerprint(call)
+                repeated = fingerprint in state.call_fingerprints
+                state.call_fingerprints.add(fingerprint)
+                if repeated:
+                    result = ToolResultRecord(
+                        call_id=call.call_id,
+                        name=call.name,
+                        ok=False,
+                        content="Repeated tool call with unchanged arguments was blocked.",
+                    )
+                else:
+                    result = self._invoke_tool(call)
                 if call.name and call.name not in state.tools_used:
                     state.tools_used.append(call.name)
                 state.tool_trace.append(
@@ -151,6 +177,12 @@ class ExplicitReActRuntime:
                         tool_call_id=result.call_id,
                     )
                 )
+                if repeated:
+                    state.stop_reason = "repeated_tool_call"
+                    return (
+                        "I stopped because the same tool call was repeated without new evidence.",
+                        state,
+                    )
 
         state.stop_reason = "max_steps"
         return ("I completed the reasoning steps but could not reach a stable final answer. "

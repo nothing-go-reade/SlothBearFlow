@@ -1,0 +1,330 @@
+x-langfuse-environment: &langfuse-environment
+  DATABASE_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:?set LANGFUSE_POSTGRES_PASSWORD}@langfuse-postgres:5432/langfuse
+  SALT: ${LANGFUSE_SALT:?set LANGFUSE_SALT}
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?set a 64-character hex LANGFUSE_ENCRYPTION_KEY}
+  TELEMETRY_ENABLED: ${LANGFUSE_TELEMETRY_ENABLED:-false}
+  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
+  CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+  CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+  CLICKHOUSE_USER: langfuse
+  CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?set LANGFUSE_CLICKHOUSE_PASSWORD}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: langfuse-redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: ${LANGFUSE_REDIS_PASSWORD:?set LANGFUSE_REDIS_PASSWORD}
+  REDIS_TLS_ENABLED: "false"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-langfuse}
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:?set LANGFUSE_MINIO_ROOT_PASSWORD}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-langfuse}
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:?set LANGFUSE_MINIO_ROOT_PASSWORD}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+
+services:
+  langfuse-postgres:
+    profiles: ["observability"]
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD:?set LANGFUSE_POSTGRES_PASSWORD}
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  langfuse-clickhouse:
+    profiles: ["observability"]
+    image: clickhouse/clickhouse-server:24.8-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?set LANGFUSE_CLICKHOUSE_PASSWORD}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  langfuse-redis:
+    profiles: ["observability"]
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${LANGFUSE_REDIS_PASSWORD:?set LANGFUSE_REDIS_PASSWORD}
+    command: ["sh", "-ec", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  langfuse-minio:
+    profiles: ["observability"]
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_ROOT_USER:-langfuse}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD:?set LANGFUSE_MINIO_ROOT_PASSWORD}
+    command: server --address ":9000" --console-address ":9001" /data
+    ports:
+      - "127.0.0.1:${LANGFUSE_MINIO_PORT:-9190}:9000"
+      - "127.0.0.1:${LANGFUSE_MINIO_CONSOLE_PORT:-9191}:9001"
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  langfuse-minio-init:
+    profiles: ["observability"]
+    image: minio/mc:RELEASE.2024-11-21T17-21-54Z
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_ROOT_USER:-langfuse}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD:?set LANGFUSE_MINIO_ROOT_PASSWORD}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        mc alias set local http://langfuse-minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD";
+        mc mb --ignore-existing local/langfuse
+    depends_on:
+      langfuse-minio:
+        condition: service_healthy
+    restart: "no"
+
+  langfuse-worker:
+    profiles: ["observability"]
+    image: langfuse/langfuse-worker:${LANGFUSE_VERSION:-3.217.0}
+    restart: unless-stopped
+    environment: *langfuse-environment
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-minio-init:
+        condition: service_completed_successfully
+
+  langfuse-web:
+    profiles: ["observability"]
+    image: langfuse/langfuse:${LANGFUSE_VERSION:-3.217.0}
+    restart: unless-stopped
+    environment:
+      <<: *langfuse-environment
+      NEXTAUTH_URL: ${LANGFUSE_URL:-http://127.0.0.1:3000}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?set LANGFUSE_NEXTAUTH_SECRET}
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-}
+    ports:
+      - "127.0.0.1:${LANGFUSE_PORT:-3000}:3000"
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --quiet --tries=1 --spider http://$$(hostname):3000/api/public/health",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 45s
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - prometheus_data:/prometheus
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:12.1.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/slothbearflow-agent.json
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    configs:
+      - source: grafana_datasource
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana_dashboard_provider
+        target: /etc/grafana/provisioning/dashboards/slothbearflow.yml
+      - source: grafana_agent_dashboard
+        target: /var/lib/grafana/dashboards/slothbearflow-agent.json
+    depends_on:
+      - prometheus
+
+configs:
+  prometheus_config:
+    content: |
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets: ["localhost:9090"]
+
+        - job_name: slothbearflow-backend
+          metrics_path: /metrics
+          authorization:
+            credentials: "${METRICS_BEARER_TOKEN:-}"
+          static_configs:
+            - targets: ["backend:8000"]
+
+  grafana_datasource:
+    content: |
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          uid: prometheus
+          type: prometheus
+          access: proxy
+          url: http://prometheus:9090
+          isDefault: true
+          editable: false
+
+  grafana_dashboard_provider:
+    content: |
+      apiVersion: 1
+      providers:
+        - name: SlothBearFlow
+          orgId: 1
+          folder: Agent
+          type: file
+          disableDeletion: true
+          updateIntervalSeconds: 30
+          allowUiUpdates: false
+          options:
+            path: /var/lib/grafana/dashboards
+
+  grafana_agent_dashboard:
+    content: |
+      {
+        "annotations": {"list": []},
+        "editable": false,
+        "graphTooltip": 1,
+        "panels": [
+          {
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+            "id": 1,
+            "targets": [{"expr": "sum(rate(slothbearflow_http_requests_total[5m]))", "legendFormat": "requests/s", "refId": "A"}],
+            "title": "HTTP request rate",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+            "id": 2,
+            "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(slothbearflow_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "A"}],
+            "title": "HTTP latency P95",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+            "gridPos": {"h": 7, "w": 8, "x": 0, "y": 8},
+            "id": 3,
+            "targets": [{"expr": "slothbearflow_active_requests", "legendFormat": "active", "refId": "A"}],
+            "title": "Active requests",
+            "type": "stat"
+          },
+          {
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+            "gridPos": {"h": 7, "w": 8, "x": 8, "y": 8},
+            "id": 4,
+            "targets": [{"expr": "sum(rate(slothbearflow_http_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "5xx/s", "refId": "A"}],
+            "title": "HTTP 5xx rate",
+            "type": "stat"
+          },
+          {
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+            "gridPos": {"h": 7, "w": 8, "x": 16, "y": 8},
+            "id": 5,
+            "targets": [{"expr": "sum by (component, status) (increase(slothbearflow_spans_total[15m]))", "legendFormat": "{{component}} / {{status}}", "refId": "A"}],
+            "title": "Agent spans (15m)",
+            "type": "bargauge"
+          }
+        ],
+        "refresh": "15s",
+        "schemaVersion": 41,
+        "tags": ["slothbearflow", "agent", "observability"],
+        "templating": {"list": []},
+        "time": {"from": "now-6h", "to": "now"},
+        "timezone": "browser",
+        "title": "SlothBearFlow Agent Overview",
+        "uid": "slothbearflow-agent",
+        "version": 1
+      }
+
+volumes:
+  langfuse_postgres_data: {}
+  langfuse_clickhouse_data: {}
+  langfuse_clickhouse_logs: {}
+  langfuse_redis_data: {}
+  langfuse_minio_data: {}
+  prometheus_data: {}
+  grafana_data: {}

@@ -193,6 +193,23 @@ def test_output_scrub_redacts_secret():
     assert "sk-ABCDEFGHIJKLMNOP1234" not in out
 
 
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "sk-proj-ABCDEFGHIJKLMNOPQRSTUVWX",
+        "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+        "eyJabcdefgh.ijklmnop.qrstuvwx",
+        "postgresql://agent:super-secret@db.internal/app",
+        "-----BEGIN PRIVATE KEY-----\nsecret-material\n-----END PRIVATE KEY-----",
+    ],
+)
+def test_output_scrub_covers_common_credential_formats(secret):
+    output = scrub_observation("prefix " + secret + " suffix", _settings(scrub=True))
+
+    assert secret not in output
+    assert "[REDACTED]" in output
+
+
 def test_output_scrub_disabled_passthrough():
     s = _settings(scrub=False)
     raw = "token sk-ABCDEFGHIJKLMNOP1234 tail"

@@ -14,6 +14,10 @@ class TurnSnapshot:
     session_id: str
     user_message: str
     final_answer: str
+    turn_id: str = ""
+    generation: int = 0
+    user_id: str = "local-user"
+    tenant_id: str = "local"
     raw_output: str = ""
     tools_used: List[str] = field(default_factory=list)
     # 工具调用轨迹 [{name, args, observation}]；BasicChatExecutor / 关闭时为空。
@@ -25,6 +29,18 @@ class TurnSnapshot:
     review_memory: bool = False
     review_skills: bool = False
 
+    def __post_init__(self) -> None:
+        try:
+            from backend.src.slothbearflow_backend.memory.redis_memory import (
+                current_session_generation,
+            )
+
+            current = current_session_generation(self.session_id)
+            if current is not None:
+                self.generation = max(0, int(current))
+        except Exception:  # noqa: BLE001
+            self.generation = max(0, int(self.generation or 0))
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -34,6 +50,10 @@ class TurnSnapshot:
             session_id=str(data.get("session_id") or ""),
             user_message=str(data.get("user_message") or ""),
             final_answer=str(data.get("final_answer") or ""),
+            turn_id=str(data.get("turn_id") or ""),
+            generation=max(0, int(data.get("generation") or 0)),
+            user_id=str(data.get("user_id") or "local-user"),
+            tenant_id=str(data.get("tenant_id") or "local"),
             raw_output=str(data.get("raw_output") or ""),
             tools_used=list(data.get("tools_used") or []),
             tool_trace=list(data.get("tool_trace") or []),

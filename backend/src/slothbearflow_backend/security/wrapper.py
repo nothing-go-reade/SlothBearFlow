@@ -1,13 +1,33 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import time
+import uuid
 from typing import Any, List
 
 from langchain_core.tools import BaseTool
+from pydantic import ValidationError
 
 from backend.src.slothbearflow_backend.security.engine import evaluate_tool_call
+from backend.src.slothbearflow_backend.security.execution import (
+    ToolArgumentError,
+    ToolCircuitOpen,
+    ToolExecutionCancelled,
+    ToolExecutionTimeout,
+    ToolInvocationError,
+    ToolResultUncertain,
+    execute_async,
+    execute_sync,
+)
 from backend.src.slothbearflow_backend.security.schema import PolicyBundle
 from backend.src.slothbearflow_backend.security.scrub import scrub_observation
+from backend.src.slothbearflow_backend.security.identity import current_principal
+from backend.src.slothbearflow_backend.security.turn_state import (
+    current_turn_cancellation_token,
+    current_turn_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,23 +67,414 @@ class PolicyGuardedTool(BaseTool):
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
         arg_dict = self._clean_args(kwargs)
+        call_id = str(uuid.uuid4())
+        started_at = time.perf_counter()
         decision = evaluate_tool_call(
             self.name, arg_dict, settings=self.settings, policy=self.policy, quota=True
         )
         if not decision.allowed:
+            self._record_trace(
+                call_id=call_id,
+                args=arg_dict,
+                ok=False,
+                status="denied",
+                observation=decision.reason,
+                error_code="tool_denied",
+                decision="deny",
+                started_at=started_at,
+            )
             return decision.reason
-        result = self.inner_tool.invoke(arg_dict)
-        return scrub_observation(result, self.settings)
+        tool_policy = self.policy.tools.get(self.name)
+        side_effecting = self._side_effecting(tool_policy)
+        try:
+            result = execute_sync(
+                self._execution_scope_name(),
+                lambda: self.inner_tool.invoke(arg_dict),
+                timeout_sec=self._setting(tool_policy, "timeout_sec", "tool_timeout_sec", 15.0),
+                retries=self._retries(tool_policy),
+                failure_threshold=int(
+                    self._setting(
+                        tool_policy,
+                        "circuit_failure_threshold",
+                        "tool_circuit_failure_threshold",
+                        3,
+                    )
+                ),
+                recovery_sec=self._setting(
+                    tool_policy,
+                    "circuit_recovery_sec",
+                    "tool_circuit_recovery_sec",
+                    30.0,
+                ),
+                retry_safe=self._retry_safe(tool_policy),
+                cancellation_token=current_turn_cancellation_token(),
+                idempotency_key=self._idempotency_key(
+                    arg_dict, fallback=call_id if side_effecting else ""
+                ),
+                side_effecting=side_effecting,
+            )
+            observation = scrub_observation(result, self.settings)
+            observation = self._truncate_observation(observation)
+            self._record_trace(
+                call_id=call_id,
+                args=arg_dict,
+                ok=True,
+                status="completed",
+                observation=str(observation),
+                error_code="",
+                decision="allow",
+                started_at=started_at,
+                result=result,
+            )
+            return observation
+        except ToolResultUncertain as exc:
+            return self._failed_observation(
+                call_id,
+                arg_dict,
+                started_at,
+                "tool_result_uncertain",
+                "Tool deadline exceeded; side effects may have completed. "
+                "Result is uncertain and must not be retried automatically. "
+                f"Idempotency key: {exc.idempotency_key}.",
+                status="uncertain",
+            )
+        except ToolExecutionTimeout:
+            return self._failed_observation(
+                call_id, arg_dict, started_at, "tool_timeout", "Tool execution timed out."
+            )
+        except ToolCircuitOpen:
+            return self._failed_observation(
+                call_id, arg_dict, started_at, "circuit_open", "Tool is temporarily unavailable."
+            )
+        except ToolExecutionCancelled:
+            return self._failed_observation(
+                call_id, arg_dict, started_at, "tool_cancelled", "Tool execution was cancelled."
+            )
+        except (ToolArgumentError, ValidationError):
+            return self._failed_observation(
+                call_id,
+                arg_dict,
+                started_at,
+                "tool_invalid_arguments",
+                _VALIDATION_ERROR_MSG,
+            )
+        except ToolInvocationError:
+            return self._failed_observation(
+                call_id,
+                arg_dict,
+                started_at,
+                "tool_invocation_rejected",
+                "Tool invocation was rejected.",
+            )
+        except Exception:
+            logger.exception("tool execution failed safely: %s", self.name)
+            return self._failed_observation(
+                call_id, arg_dict, started_at, "tool_error", "Tool execution failed safely."
+            )
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         arg_dict = self._clean_args(kwargs)
+        call_id = str(uuid.uuid4())
+        started_at = time.perf_counter()
         decision = evaluate_tool_call(
             self.name, arg_dict, settings=self.settings, policy=self.policy, quota=True
         )
         if not decision.allowed:
+            self._record_trace(
+                call_id=call_id,
+                args=arg_dict,
+                ok=False,
+                status="denied",
+                observation=decision.reason,
+                error_code="tool_denied",
+                decision="deny",
+                started_at=started_at,
+            )
             return decision.reason
-        result = await self.inner_tool.ainvoke(arg_dict)
-        return scrub_observation(result, self.settings)
+        tool_policy = self.policy.tools.get(self.name)
+        side_effecting = self._side_effecting(tool_policy)
+        try:
+            result = await execute_async(
+                self._execution_scope_name(),
+                lambda: self.inner_tool.ainvoke(arg_dict),
+                timeout_sec=self._setting(tool_policy, "timeout_sec", "tool_timeout_sec", 15.0),
+                retries=self._retries(tool_policy),
+                failure_threshold=int(
+                    self._setting(
+                        tool_policy,
+                        "circuit_failure_threshold",
+                        "tool_circuit_failure_threshold",
+                        3,
+                    )
+                ),
+                recovery_sec=self._setting(
+                    tool_policy,
+                    "circuit_recovery_sec",
+                    "tool_circuit_recovery_sec",
+                    30.0,
+                ),
+                retry_safe=self._retry_safe(tool_policy),
+                cancellation_token=current_turn_cancellation_token(),
+                idempotency_key=self._idempotency_key(
+                    arg_dict, fallback=call_id if side_effecting else ""
+                ),
+                side_effecting=side_effecting,
+            )
+            observation = scrub_observation(result, self.settings)
+            observation = self._truncate_observation(observation)
+            self._record_trace(
+                call_id=call_id,
+                args=arg_dict,
+                ok=True,
+                status="completed",
+                observation=str(observation),
+                error_code="",
+                decision="allow",
+                started_at=started_at,
+                result=result,
+            )
+            return observation
+        except ToolResultUncertain as exc:
+            return self._failed_observation(
+                call_id,
+                arg_dict,
+                started_at,
+                "tool_result_uncertain",
+                "Tool deadline exceeded; side effects may have completed. "
+                "Result is uncertain and must not be retried automatically. "
+                f"Idempotency key: {exc.idempotency_key}.",
+                status="uncertain",
+            )
+        except ToolExecutionTimeout:
+            return self._failed_observation(
+                call_id, arg_dict, started_at, "tool_timeout", "Tool execution timed out."
+            )
+        except ToolCircuitOpen:
+            return self._failed_observation(
+                call_id, arg_dict, started_at, "circuit_open", "Tool is temporarily unavailable."
+            )
+        except ToolExecutionCancelled:
+            return self._failed_observation(
+                call_id, arg_dict, started_at, "tool_cancelled", "Tool execution was cancelled."
+            )
+        except (ToolArgumentError, ValidationError):
+            return self._failed_observation(
+                call_id,
+                arg_dict,
+                started_at,
+                "tool_invalid_arguments",
+                _VALIDATION_ERROR_MSG,
+            )
+        except ToolInvocationError:
+            return self._failed_observation(
+                call_id,
+                arg_dict,
+                started_at,
+                "tool_invocation_rejected",
+                "Tool invocation was rejected.",
+            )
+        except Exception:
+            logger.exception("async tool execution failed safely: %s", self.name)
+            return self._failed_observation(
+                call_id, arg_dict, started_at, "tool_error", "Tool execution failed safely."
+            )
+
+    def _setting(
+        self,
+        tool_policy: Any,
+        policy_name: str,
+        settings_name: str,
+        default: float,
+    ) -> float:
+        policy_value = getattr(tool_policy, policy_name, None) if tool_policy else None
+        value = policy_value if policy_value is not None else getattr(
+            self.settings, settings_name, default
+        )
+        return max(0.001, float(value))
+
+    def _retries(self, tool_policy: Any) -> int:
+        configured = getattr(tool_policy, "retry_attempts", None) if tool_policy else None
+        if configured is None:
+            configured = getattr(self.settings, "tool_retry_attempts", 0)
+        # Automatic retries are restricted to read-only, side-effect-free tools.
+        if tool_policy is not None and getattr(tool_policy, "cls", "read") != "read":
+            return 0
+        return max(0, min(5, int(configured)))
+
+    @staticmethod
+    def _retry_safe(tool_policy: Any) -> bool:
+        return bool(
+            tool_policy is not None
+            and getattr(tool_policy, "cls", "read") == "read"
+            and getattr(tool_policy, "retry_safe", False)
+        )
+
+    @staticmethod
+    def _side_effecting(tool_policy: Any) -> bool:
+        return bool(
+            tool_policy is not None
+            and getattr(tool_policy, "cls", "read") in {"write", "network", "system"}
+        )
+
+    def _idempotency_key(self, args: dict, *, fallback: str = "") -> str:
+        turn_id = current_turn_id()
+        if not turn_id:
+            return fallback
+        principal = current_principal()
+        payload = json.dumps(
+            {
+                "turn_id": turn_id,
+                "tenant_id": principal.tenant_id,
+                "user_id": principal.user_id,
+                "tool": self.name,
+                "args": args,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _execution_scope_name(self) -> str:
+        principal = current_principal()
+        provenance = getattr(self.inner_tool, "provenance", None)
+        server = ""
+        if isinstance(provenance, dict):
+            server = str(provenance.get("server") or "")
+        payload = json.dumps(
+            {
+                "tenant_id": principal.tenant_id or "local",
+                "server": server or "local",
+                "tool": self.name,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return "tool-circuit:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _failed_observation(
+        self,
+        call_id: str,
+        args: dict,
+        started_at: float,
+        error_code: str,
+        message: str,
+        *,
+        status: str = "failed",
+    ) -> str:
+        self._record_trace(
+            call_id=call_id,
+            args=args,
+            ok=False,
+            status=status,
+            observation=message,
+            error_code=error_code,
+            decision="allow",
+            started_at=started_at,
+        )
+        return message
+
+    def _truncate_observation(self, observation: Any) -> str:
+        value = str(observation)
+        limit = max(
+            256,
+            int(getattr(self.settings, "tool_observation_max_chars", 12000)),
+        )
+        if len(value) <= limit:
+            return value
+        return value[:limit] + "\n[TOOL_OUTPUT_TRUNCATED]"
+
+    def _record_trace(
+        self,
+        *,
+        call_id: str,
+        args: dict,
+        ok: bool,
+        status: str,
+        observation: str,
+        error_code: str,
+        decision: str,
+        started_at: float,
+        result: Any = None,
+    ) -> None:
+        from backend.src.slothbearflow_backend.agent.tool_trace import (
+            record_tool_trace,
+            safe_tool_args,
+        )
+
+        max_chars = max(
+            64,
+            int(getattr(self.settings, "tool_trace_observation_max_chars", 800)),
+        )
+        provenance = getattr(result, "provenance", None)
+        if not isinstance(provenance, dict):
+            provenance = {}
+        citations = getattr(result, "citations", None)
+        if citations:
+            provenance["citations"] = list(citations)
+        sources = getattr(result, "sources", None)
+        if sources:
+            provenance["sources"] = list(sources)
+        record_tool_trace(
+            {
+                "call_id": call_id,
+                "name": self.name,
+                "args": safe_tool_args(args, self.settings),
+                "ok": ok,
+                "status": status,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                "observation": str(observation)[:max_chars],
+                "error_code": error_code,
+                "policy_decision": decision,
+                "provenance": provenance,
+            }
+        )
+        try:
+            from backend.src.slothbearflow_backend.observability import get_observability
+
+            get_observability(self.settings).event(
+                "tool.call",
+                component="tool",
+                metadata={
+                    "tool": self.name,
+                    "status": status,
+                    "error_code": error_code,
+                    "duration_ms": round(
+                        (time.perf_counter() - started_at) * 1000, 3
+                    ),
+                    "policy_decision": decision,
+                    "provenance": provenance,
+                },
+            )
+        except Exception:
+            logger.exception("tool observability event failed")
+        try:
+            from backend.src.slothbearflow_backend.security.audit import audit_event
+
+            principal = current_principal()
+            event_type = (
+                "tool.call_completed"
+                if ok
+                else "tool.call_denied" if status == "denied" else "tool.call_failed"
+            )
+            audit_event(
+                self.settings,
+                event_type,
+                actor=principal.user_id,
+                tenant_id=principal.tenant_id,
+                target=self.name,
+                outcome="success" if ok else status,
+                metadata={
+                    "call_id": call_id,
+                    "error_code": error_code,
+                    "duration_ms": round(
+                        (time.perf_counter() - started_at) * 1000, 3
+                    ),
+                    "policy_decision": decision,
+                },
+            )
+        except Exception:
+            logger.exception("tool audit event failed")
 
 
 def apply_tool_policy(
@@ -83,7 +494,7 @@ def apply_tool_policy(
     for tool in tools:
         name = getattr(tool, "name", None)
         if name is None:
-            result.append(tool)
+            logger.warning("[tool-guard] filtered unnamed tool")
             continue
         if mode == "enforce":
             tp = policy.tools.get(name)

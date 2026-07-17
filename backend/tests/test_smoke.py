@@ -10,6 +10,7 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("USE_RAG", "false")
     monkeypatch.setenv("STRUCTURED_OUTPUT", "false")
     monkeypatch.setenv("ASYNC_SUMMARY_UPDATE", "false")
+    monkeypatch.setenv("POSTGRES_RESTORE_ON_REDIS_MISS", "false")
     from backend.src.slothbearflow_backend.config import get_settings
 
     get_settings.cache_clear()
@@ -65,6 +66,35 @@ def test_health_marks_memory_fallback_as_degraded(
     assert body["session_store"]["backend"] == "memory"
 
 
+def test_health_marks_required_llm_probe_failure_as_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.src.slothbearflow_backend import main
+
+    monkeypatch.setattr(main, "ping_redis", lambda settings: (True, None))
+    monkeypatch.setattr(
+        main,
+        "get_redis_session",
+        lambda session_id, settings: ({"messages": []}, object()),
+    )
+    monkeypatch.setattr(
+        main,
+        "get_llm_status",
+        lambda settings: {
+            "provider": "ollama",
+            "model": "missing",
+            "checked": True,
+            "ready": False,
+            "reason": "model missing",
+        },
+    )
+
+    body = main.health()
+
+    assert body["status"] == "degraded"
+    assert body["llm"]["ready"] is False
+
+
 def test_root_ok() -> None:
     from backend.src.slothbearflow_backend.main import app
 
@@ -101,6 +131,61 @@ def test_build_agent_executor_falls_back_when_model_has_no_tools(monkeypatch: py
     get_settings.cache_clear()
     executor = build_agent_executor(vector_store=None, chat_history=[], rolling_summary=None)
     assert isinstance(executor, BasicChatExecutor)
+
+
+def test_basic_executor_only_emits_user_visible_text_blocks() -> None:
+    from types import SimpleNamespace
+
+    from backend.src.slothbearflow_backend.agent.agent_executor import BasicChatExecutor
+    from backend.src.slothbearflow_backend.config import get_settings
+
+    content = [
+        {"type": "reasoning", "text": "PRIVATE_REASONING"},
+        {"type": "text", "text": "public"},
+        {"type": "output_text", "text": " answer"},
+        {"type": "tool_use", "name": "secret-tool"},
+    ]
+
+    class Runnable:
+        def invoke(self, _payload):
+            return SimpleNamespace(content=content)
+
+        def stream(self, _payload):
+            yield SimpleNamespace(content=content)
+
+    settings = get_settings().model_copy(update={"observability_enabled": False})
+    executor = BasicChatExecutor(
+        Runnable(),
+        model="test-model",
+        prompt_version="test",
+        settings=settings,
+    )
+
+    assert executor.invoke({"input": "hello"})["output"] == "public answer"
+    chunks = list(executor.stream({"input": "hello"}))
+    assert chunks[0]["output"] == "public answer"
+    assert "PRIVATE_REASONING" not in str(chunks)
+
+
+def test_no_tool_prompt_allows_server_prefetched_rag_evidence() -> None:
+    from backend.src.slothbearflow_backend.prompt import build_system_prompt
+
+    prompt = build_system_prompt(
+        supports_tools=False,
+        rolling_summary="summary data",
+        learning_context="learning data",
+    )
+
+    assert "服务端预先提供的【检索片段】" in prompt
+    assert "不得声称是你主动调用了工具" in prompt
+    assert "UNTRUSTED_HISTORY_SUMMARY" in prompt
+    assert "UNTRUSTED_LEARNING_CONTEXT" in prompt
+
+
+def test_turn_input_defaults_to_least_privilege_role() -> None:
+    from backend.src.slothbearflow_backend.agent.conversation_loop import TurnInput
+
+    assert TurnInput(session_id="s", message="hello").roles == ["viewer"]
 
 
 def test_build_agent_executor_uses_explicit_react_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,6 +258,52 @@ def test_explicit_react_runtime_stops_on_max_steps() -> None:
     assert "dummy_tool" in result["tools_used"]
     assert isinstance(result["output"], str)
     assert result["output"]
+
+
+def test_explicit_react_runtime_bounds_batched_tool_calls() -> None:
+    from langchain_core.messages import AIMessage
+
+    from backend.src.slothbearflow_backend.agent.react_runtime import ExplicitReActRuntime
+
+    calls: list[int] = []
+
+    class DummyBoundLLM:
+        def invoke(self, _messages):
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "dummy_tool",
+                        "args": {"index": index},
+                        "id": f"call-{index}",
+                        "type": "tool_call",
+                    }
+                    for index in range(25)
+                ],
+            )
+
+    class DummyLLM:
+        def bind_tools(self, _tools):
+            return DummyBoundLLM()
+
+    class DummyTool:
+        name = "dummy_tool"
+
+        def invoke(self, payload):
+            calls.append(int(payload["index"]))
+            return "ok"
+
+    runtime = ExplicitReActRuntime(
+        llm=DummyLLM(),
+        tools=[DummyTool()],
+        max_steps=1,
+        max_tool_calls=3,
+    )
+    result = runtime.invoke({"input": "test"})
+
+    assert result["stop_reason"] == "max_tool_calls"
+    assert calls == [0, 1, 2]
+    assert len(result["tool_trace"]) == 3
 
 
 def test_get_chat_llm_uses_ollama_provider(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -347,8 +478,6 @@ def test_config_defaults_to_plain_text_output() -> None:
     assert s.enable_postgres_persistence is False
     assert s.enable_explicit_react_runtime is False
     assert s.react_max_steps == 4
-    assert s.react_stream_thoughts is False
-    assert s.react_tool_timeout_sec > 0
 
 
 def test_chat_streams_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -375,6 +504,45 @@ def test_chat_streams_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     assert r.status_code == 200
     assert '"type": "chunk"' in body
     assert "这是流式返回" in body
+
+
+def test_chat_stream_returns_structured_error_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STREAM_OUTPUT", "true")
+    monkeypatch.setenv("STRUCTURED_OUTPUT", "false")
+    monkeypatch.setenv("STREAM_OUTPUT_FORMAT", "sse")
+    from backend.src.slothbearflow_backend.config import get_settings
+    from backend.src.slothbearflow_backend.main import app
+
+    class FailingStreamExecutor:
+        def stream(self, payload):
+            if False:
+                yield payload
+            raise ValueError("sensitive upstream failure")
+
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.build_agent_executor",
+        lambda **kwargs: FailingStreamExecutor(),
+    )
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.get_vector_store",
+        lambda settings=None: None,
+    )
+    get_settings.cache_clear()
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/chat",
+            json={"session_id": "s-stream-error", "message": "你好"},
+        ) as response:
+            body = "".join(chunk for chunk in response.iter_text())
+
+    assert response.status_code == 200
+    assert '"type": "start"' in body
+    assert '"type": "error"' in body
+    assert '"error_code": "agent_execution_failed"' in body
+    assert "sensitive upstream failure" not in body
+    assert '"type": "done"' not in body
 
 
 def test_chat_streams_plain_text_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -427,6 +595,31 @@ def test_chat_works_with_in_memory_session_store(monkeypatch: pytest.MonkeyPatch
     assert body["session_id"] == "s1"
 
 
+def test_chat_releases_concurrency_slot_when_session_load_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHAT_CONCURRENCY_LIMIT", "1")
+    from backend.src.slothbearflow_backend import main
+    from backend.src.slothbearflow_backend.config import get_settings
+
+    get_settings.cache_clear()
+
+    def fail_session_load(*_args, **_kwargs):
+        raise RuntimeError("session backend unavailable")
+
+    monkeypatch.setattr(main, "get_redis_session", fail_session_load)
+    with TestClient(main.app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/chat",
+            json={"session_id": "s-slot", "message": "你好"},
+        )
+        slot_is_locked = main.app.state.chat_semaphore.locked()
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Chat dependencies are temporarily unavailable."
+    assert slot_is_locked is False
+
+
 def test_chat_persists_metadata_when_postgres_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENABLE_POSTGRES_PERSISTENCE", "true")
     monkeypatch.setenv("POSTGRES_DSN", "postgresql://demo")
@@ -445,8 +638,24 @@ def test_chat_persists_metadata_when_postgres_enabled(monkeypatch: pytest.Monkey
         lambda settings=None: True,
     )
     monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.fail_unrecoverable_ingest_jobs",
+        lambda settings=None: 0,
+    )
+    monkeypatch.setattr(
         "backend.src.slothbearflow_backend.main.postgres_persistence.persist_chat_turn",
-        lambda **kwargs: persisted.append(kwargs),
+        lambda **kwargs: persisted.append(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.is_session_tombstoned",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.memory.redis_memory.postgres_persistence.get_session_state",
+        lambda *_args, **_kwargs: {
+            "generation": 0,
+            "tombstoned": False,
+            "persistent": True,
+        },
     )
 
     with TestClient(app) as client:
@@ -517,8 +726,12 @@ def test_ingest_persists_job_metadata_when_postgres_enabled(monkeypatch: pytest.
         lambda settings=None: True,
     )
     monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.fail_unrecoverable_ingest_jobs",
+        lambda settings=None: 0,
+    )
+    monkeypatch.setattr(
         "backend.src.slothbearflow_backend.main.postgres_persistence.persist_ingest_job",
-        lambda **kwargs: persisted.append(kwargs),
+        lambda **kwargs: (persisted.append(kwargs) or True),
     )
     get_settings.cache_clear()
 
@@ -586,12 +799,28 @@ def test_chat_stream_persists_stream_metadata_when_postgres_enabled(monkeypatch:
     monkeypatch.setattr("backend.src.slothbearflow_backend.main.get_vector_store", lambda settings=None: None)
     monkeypatch.setattr("backend.src.slothbearflow_backend.main.postgres_persistence.ensure_schema", lambda settings=None: True)
     monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.fail_unrecoverable_ingest_jobs",
+        lambda settings=None: 0,
+    )
+    monkeypatch.setattr(
         "backend.src.slothbearflow_backend.main.postgres_persistence.persist_chat_turn",
-        lambda **kwargs: persisted_turns.append(kwargs),
+        lambda **kwargs: persisted_turns.append(kwargs) or True,
     )
     monkeypatch.setattr(
         "backend.src.slothbearflow_backend.main.postgres_persistence.persist_stream_events",
-        lambda **kwargs: persisted_events.append(kwargs),
+        lambda **kwargs: persisted_events.append(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.is_session_tombstoned",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.memory.redis_memory.postgres_persistence.get_session_state",
+        lambda *_args, **_kwargs: {
+            "generation": 0,
+            "tombstoned": False,
+            "persistent": True,
+        },
     )
     get_settings.cache_clear()
 
@@ -694,6 +923,11 @@ def test_chat_returns_rag_citations(monkeypatch: pytest.MonkeyPatch) -> None:
 
     class FakeExecutor:
         def invoke(self, payload):
+            from backend.src.slothbearflow_backend.rag.security import (
+                record_recalled_metadata,
+            )
+
+            record_recalled_metadata({"source": "refund-policy.md"})
             return {"output": "根据知识库，退款申请需要财务审核。"}
 
     monkeypatch.setattr("backend.src.slothbearflow_backend.main.build_agent_executor", lambda **kwargs: FakeExecutor())

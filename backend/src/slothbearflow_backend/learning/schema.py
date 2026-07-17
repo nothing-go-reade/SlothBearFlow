@@ -15,6 +15,12 @@ class MemoryItem(BaseModel):
     description: str = Field(default="", description="一行摘要，用于索引与读回")
     type: str = Field(default="user", description="user | feedback | project | reference")
     body: str = Field(default="", description="记忆正文")
+    confidence: float = Field(default=0.8, ge=0, le=1)
+    source_tenant_id: str = ""
+    source_user_id: str = ""
+    source_session_id: str = ""
+    source_turn_id: str = ""
+    source_generation: int = Field(default=0, ge=0)
 
 
 class SkillItem(BaseModel):
@@ -23,6 +29,12 @@ class SkillItem(BaseModel):
     name: str = Field(description="kebab-case 短 slug，作为文件名与去重键")
     trigger: str = Field(default="", description="何时套用该技巧")
     body: str = Field(default="", description="技巧正文 / 步骤")
+    confidence: float = Field(default=0.8, ge=0, le=1)
+    source_tenant_id: str = ""
+    source_user_id: str = ""
+    source_session_id: str = ""
+    source_turn_id: str = ""
+    source_generation: int = Field(default=0, ge=0)
 
 
 class ReviewResult(BaseModel):
