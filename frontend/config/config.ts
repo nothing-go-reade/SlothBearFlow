@@ -5,6 +5,10 @@ const apiProxyTarget =
 
 export default defineConfig({
   title: "SlothBearFlow Console",
+  favicons: [
+    "/assets/favicon-32.png",
+    "/assets/favicon-64.png",
+  ],
   npmClient: "pnpm",
   mfsu: false,
   define: {

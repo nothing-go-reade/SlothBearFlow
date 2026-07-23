@@ -159,7 +159,7 @@ def test_milvus_stale_cleanup_targets_versioned_and_local_legacy_chunks() -> Non
     )
 
     calls: list[tuple[str, dict[str, Any]]] = []
-    delete_counts = iter((1, 1, 0, 0, 0))
+    delete_counts = iter((1, 1))
 
     class Client:
         def has_collection(self, *args: Any, **kwargs: Any) -> bool:
@@ -168,6 +168,19 @@ def test_milvus_stale_cleanup_targets_versioned_and_local_legacy_chunks() -> Non
         def delete(self, **kwargs: Any) -> dict[str, int]:
             calls.append(("delete", kwargs))
             return {"delete_count": next(delete_counts)}
+
+        def query(self, **kwargs: Any) -> list[dict[str, Any]]:
+            calls.append(("query", kwargs))
+            return [
+                {
+                    "id": "legacy-1",
+                    "source": "docs/runbook.md",
+                    "metadata": {
+                        "document_id": "doc-1",
+                        "tenant_id": "local",
+                    },
+                }
+            ]
 
         def flush(self, **kwargs: Any) -> None:
             calls.append(("flush", kwargs))
@@ -194,9 +207,34 @@ def test_milvus_stale_cleanup_targets_versioned_and_local_legacy_chunks() -> Non
         and 'metadata["tenant_id"] == "local"' in value
         for value in filters
     )
-    assert any('source == "docs/runbook.md"' in value for value in filters)
-    assert any("not exists" in value for value in filters)
+    assert any(
+        'source == "docs/runbook.md"' in str(kwargs.get("filter") or "")
+        for operation, kwargs in calls
+        if operation in {"query", "delete"}
+    )
+    assert all("not exists" not in value for value in filters)
+    assert any('id in ["legacy-1"]' in value for value in filters)
     assert calls[-1][0] == "flush"
+
+
+def test_milvus_legacy_acl_filters_use_supported_json_comparisons() -> None:
+    from backend.src.slothbearflow_backend.rag.security import (
+        RagAccessContext,
+        build_milvus_acl_filters,
+    )
+
+    filters = build_milvus_acl_filters(
+        RagAccessContext(
+            tenant_id="local",
+            user_id="admin",
+            roles={"admin"},
+            allow_legacy=True,
+        )
+    )
+
+    assert filters
+    assert all("not exists" not in value for value in filters)
+    assert any('metadata["visibility"] == ""' in value for value in filters)
 
 
 def test_retrieval_pushes_access_context_into_vector_and_bm25_searches() -> None:

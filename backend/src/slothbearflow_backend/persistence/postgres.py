@@ -147,6 +147,9 @@ class PostgresPersistence:
                         CREATE TABLE IF NOT EXISTS agent_sessions (
                             session_id TEXT PRIMARY KEY,
                             generation BIGINT NOT NULL DEFAULT 0,
+                            display_session_id TEXT NOT NULL DEFAULT '',
+                            user_id TEXT NOT NULL DEFAULT '',
+                            tenant_id TEXT NOT NULL DEFAULT '',
                             summary TEXT NOT NULL DEFAULT '',
                             last_user_message TEXT NOT NULL DEFAULT '',
                             last_assistant_message TEXT NOT NULL DEFAULT '',
@@ -207,6 +210,51 @@ class PostgresPersistence:
                         cur.execute(statement)
                     cur.execute(
                         "ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0"
+                    )
+                    for statement in (
+                        "ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS display_session_id TEXT NOT NULL DEFAULT ''",
+                        "ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''",
+                        "ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT ''",
+                    ):
+                        cur.execute(statement)
+                    cur.execute(
+                        """
+                        WITH owners AS (
+                            SELECT DISTINCT ON (session_id)
+                                session_id,
+                                user_id,
+                                tenant_id
+                            FROM agent_chat_turns
+                            WHERE user_id <> '' AND tenant_id <> ''
+                            ORDER BY session_id, created_at DESC, id DESC
+                        )
+                        UPDATE agent_sessions AS sessions
+                        SET user_id = owners.user_id,
+                            tenant_id = owners.tenant_id,
+                            display_session_id = CASE
+                                WHEN sessions.session_id LIKE 'secure:%'
+                                    THEN 'legacy-' || SUBSTRING(
+                                        sessions.session_id FROM 8 FOR 16
+                                    )
+                                ELSE sessions.session_id
+                            END
+                        FROM owners
+                        WHERE sessions.session_id = owners.session_id
+                          AND sessions.display_session_id = ''
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_sessions_user_display
+                        ON agent_sessions (tenant_id, user_id, display_session_id)
+                        WHERE display_session_id <> ''
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE INDEX IF NOT EXISTS idx_agent_sessions_user_updated
+                        ON agent_sessions (tenant_id, user_id, updated_at DESC)
+                        """
                     )
                     cur.execute(
                         """
@@ -535,6 +583,7 @@ class PostgresPersistence:
         model: str = "",
         executor: str = "",
         prompt_version: str = "",
+        display_session_id: str = "",
         user_id: str = "",
         tenant_id: str = "",
         generation: Optional[int] = None,
@@ -599,12 +648,27 @@ class PostgresPersistence:
                         INSERT INTO agent_sessions (
                             session_id,
                             generation,
+                            display_session_id,
+                            user_id,
+                            tenant_id,
                             last_user_message,
                             last_assistant_message
                         )
-                        VALUES (%s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (session_id) DO UPDATE SET
                             generation = EXCLUDED.generation,
+                            display_session_id = COALESCE(
+                                NULLIF(EXCLUDED.display_session_id, ''),
+                                agent_sessions.display_session_id
+                            ),
+                            user_id = COALESCE(
+                                NULLIF(EXCLUDED.user_id, ''),
+                                agent_sessions.user_id
+                            ),
+                            tenant_id = COALESCE(
+                                NULLIF(EXCLUDED.tenant_id, ''),
+                                agent_sessions.tenant_id
+                            ),
                             last_user_message = EXCLUDED.last_user_message,
                             last_assistant_message = EXCLUDED.last_assistant_message,
                             updated_at = NOW()
@@ -613,6 +677,9 @@ class PostgresPersistence:
                         (
                             session_id,
                             expected_generation,
+                            str(display_session_id or ""),
+                            str(user_id or ""),
+                            str(tenant_id or ""),
                             user_message,
                             assistant_message,
                         ),
@@ -677,6 +744,110 @@ class PostgresPersistence:
         except Exception:
             logger.exception("PostgreSQL 持久化 chat turn 失败: session_id=%s", session_id)
             return False
+
+    def list_user_sessions(
+        self,
+        tenant_id: str,
+        user_id: str,
+        *,
+        limit: int = 50,
+        settings: Optional[Settings] = None,
+    ) -> Optional[list[dict[str, Any]]]:
+        settings = settings or get_settings()
+        if not self.ensure_schema(settings):
+            return None
+        safe_limit = max(1, min(int(limit), 100))
+        try:
+            with self._get_connection(settings) as conn:
+                if conn is None:
+                    return None
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT
+                            sessions.display_session_id,
+                            sessions.created_at,
+                            sessions.updated_at,
+                            sessions.last_user_message,
+                            sessions.last_assistant_message,
+                            COUNT(turns.id) AS turn_count
+                        FROM agent_sessions AS sessions
+                        LEFT JOIN agent_chat_turns AS turns
+                          ON turns.session_id = sessions.session_id
+                         AND turns.generation = sessions.generation
+                        LEFT JOIN agent_session_tombstones AS tombstones
+                          ON tombstones.session_id = sessions.session_id
+                         AND tombstones.active = TRUE
+                        WHERE sessions.tenant_id = %s
+                          AND sessions.user_id = %s
+                          AND sessions.display_session_id <> ''
+                          AND tombstones.session_id IS NULL
+                        GROUP BY sessions.session_id
+                        ORDER BY sessions.updated_at DESC, sessions.created_at DESC
+                        LIMIT %s
+                        """,
+                        (str(tenant_id), str(user_id), safe_limit),
+                    )
+                    rows = cur.fetchall() or []
+            return [
+                {
+                    "session_id": str(row[0]),
+                    "created_at": row[1].isoformat(),
+                    "updated_at": row[2].isoformat(),
+                    "last_user_message": str(row[3] or ""),
+                    "last_assistant_message": str(row[4] or ""),
+                    "turn_count": int(row[5] or 0),
+                }
+                for row in rows
+            ]
+        except Exception:
+            logger.exception(
+                "PostgreSQL 查询用户会话失败: tenant_id=%s user_id=%s",
+                tenant_id,
+                user_id,
+            )
+            return None
+
+    def resolve_user_session_id(
+        self,
+        tenant_id: str,
+        user_id: str,
+        display_session_id: str,
+        *,
+        settings: Optional[Settings] = None,
+    ) -> Optional[str]:
+        settings = settings or get_settings()
+        if not self.ensure_schema(settings):
+            return None
+        try:
+            with self._get_connection(settings) as conn:
+                if conn is None:
+                    return None
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT sessions.session_id
+                        FROM agent_sessions AS sessions
+                        LEFT JOIN agent_session_tombstones AS tombstones
+                          ON tombstones.session_id = sessions.session_id
+                         AND tombstones.active = TRUE
+                        WHERE sessions.tenant_id = %s
+                          AND sessions.user_id = %s
+                          AND sessions.display_session_id = %s
+                          AND tombstones.session_id IS NULL
+                        LIMIT 1
+                        """,
+                        (str(tenant_id), str(user_id), str(display_session_id)),
+                    )
+                    row = cur.fetchone()
+            return str(row[0]) if row else None
+        except Exception:
+            logger.exception(
+                "PostgreSQL 解析用户会话失败: tenant_id=%s user_id=%s",
+                tenant_id,
+                user_id,
+            )
+            return None
 
     def persist_stream_events(
         self,

@@ -146,10 +146,19 @@ button:disabled {
   justify-content: center;
   width: 36px;
   height: 36px;
-  color: #ffffff;
+  padding: 2px;
+  overflow: hidden;
   border-radius: var(--radius);
-  background: linear-gradient(145deg, var(--indigo), var(--teal));
+  background: #ffffff;
   box-shadow: 0 8px 18px rgba(37, 103, 91, 0.2);
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: calc(var(--radius) - 2px);
+  object-fit: cover;
 }
 
 .brand-copy {
@@ -271,7 +280,7 @@ button:disabled {
   gap: 5px;
 }
 
-.session-field input,
+.session-field select,
 .ingest-section input,
 .ingest-section textarea {
   width: 100%;
@@ -284,24 +293,33 @@ button:disabled {
     box-shadow 150ms ease;
 }
 
-.session-field input:focus,
+.session-field select:focus,
 .ingest-section input:focus,
 .ingest-section textarea:focus {
   border-color: rgba(11, 139, 115, 0.52);
   box-shadow: 0 0 0 3px rgba(11, 139, 115, 0.09);
 }
 
-.session-field input[aria-invalid="true"],
-.mobile-session-field input[aria-invalid="true"] {
+.session-field select[aria-invalid="true"],
+.mobile-session-field select[aria-invalid="true"] {
   border-color: var(--red);
 }
 
-.session-field input {
+.session-field select {
+  flex: 1 1 auto;
   min-width: 0;
   height: 36px;
   padding: 0 9px;
+  color: var(--ink);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 11px;
+  cursor: pointer;
+}
+
+.session-field select:disabled,
+.mobile-session-field select:disabled {
+  cursor: wait;
+  opacity: 0.64;
 }
 
 .session-field button,
@@ -562,6 +580,14 @@ button:disabled {
   border: 1px solid rgba(11, 139, 115, 0.18);
   border-radius: var(--radius);
   background: var(--teal-soft);
+}
+
+.avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: calc(var(--radius) - 1px);
+  object-fit: cover;
 }
 
 .message.user .avatar {
@@ -1628,7 +1654,7 @@ button:disabled {
   .brand-copy,
   .rail-nav button span,
   .session-block label,
-  .session-field input,
+  .session-field select,
   .session-stats,
   .rail-status > div,
   .section-kicker span {
@@ -1761,7 +1787,8 @@ button:disabled {
     gap: 6px;
   }
 
-  .mobile-session-field input {
+  .mobile-session-field select {
+    flex: 1 1 auto;
     width: 100%;
     min-width: 0;
     height: 34px;
@@ -1772,6 +1799,7 @@ button:disabled {
     font-family: "SFMono-Regular", Consolas, monospace;
     font-size: 11px;
     outline: 0;
+    cursor: pointer;
   }
 
   .mobile-session-field button {

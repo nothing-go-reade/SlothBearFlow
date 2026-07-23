@@ -49,7 +49,7 @@ def _truncate_message(message: BaseMessage, max_tokens: int) -> Optional[BaseMes
         return None
     truncated = content[:low].rstrip()
     if low < len(content):
-        truncated = truncated.rstrip(" ...") + "..."
+        truncated = truncated.rstrip().rstrip(".") + "..."
         while truncated and estimate_tokens(truncated) > max_tokens:
             truncated = truncated[:-4].rstrip() + "..."
     if hasattr(message, "model_copy"):

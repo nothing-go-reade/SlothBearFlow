@@ -728,6 +728,59 @@ def test_production_postgres_status_requires_current_alembic_head(
     assert persistence.ensure_schema(settings) is False
 
 
+def test_development_schema_adds_session_metadata_before_legacy_backfill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.src.slothbearflow_backend.config import get_settings
+    from backend.src.slothbearflow_backend.persistence.postgres import PostgresPersistence
+
+    statements: list[str] = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: object = None) -> None:
+            statements.append(" ".join(sql.split()))
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+    persistence = PostgresPersistence()
+    settings = get_settings().model_copy(
+        update={
+            "app_env": "development",
+            "enable_postgres_persistence": True,
+            "postgres_dsn": "postgresql://example",
+        }
+    )
+    monkeypatch.setattr(persistence, "_load_driver", lambda: object())
+    monkeypatch.setattr(persistence, "_get_connection", lambda _settings: Connection())
+
+    assert persistence.ensure_schema(settings) is True
+    add_column_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if "ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS display_session_id" in sql
+    )
+    backfill_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if sql.startswith("WITH owners AS")
+    )
+    assert add_column_index < backfill_index
+
+
 def test_delete_memory_durable_failure_does_not_touch_redis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1166,6 +1219,104 @@ def test_auth_endpoints_use_http_only_cookie_when_enabled(
     assert me.json()["tenant_id"] == "t1"
     assert logout.status_code == 200
     assert after_logout.status_code == 401
+
+
+def test_sessions_endpoint_is_scoped_to_current_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.src.slothbearflow_backend.config import get_settings
+    from backend.src.slothbearflow_backend.main import app
+    from backend.src.slothbearflow_backend.security.auth import hash_password
+
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("AUTH_SECRET", "s" * 48)
+    monkeypatch.setenv("ENABLE_POSTGRES_PERSISTENCE", "true")
+    monkeypatch.setenv("POSTGRES_DSN", "postgresql://demo")
+    monkeypatch.setenv(
+        "AUTH_USERS_JSON",
+        json.dumps(
+            {
+                "alice": {
+                    "password_hash": hash_password("correct horse battery staple"),
+                    "tenant_id": "tenant-a",
+                    "roles": ["viewer"],
+                }
+            }
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def list_sessions(tenant_id: str, user_id: str, **kwargs):
+        captured.update(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            limit=kwargs.get("limit"),
+        )
+        return [
+            {
+                "session_id": "web-123",
+                "created_at": "2026-07-23T01:00:00+00:00",
+                "updated_at": "2026-07-23T02:00:00+00:00",
+                "last_user_message": "hello",
+                "last_assistant_message": "world",
+                "turn_count": 2,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.ensure_schema",
+        lambda settings=None: True,
+    )
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.fail_unrecoverable_ingest_jobs",
+        lambda settings=None: 0,
+    )
+    monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.list_user_sessions",
+        list_sessions,
+    )
+    get_settings.cache_clear()
+
+    with TestClient(app) as client:
+        login = client.post(
+            "/auth/login",
+            json={"username": "alice", "password": "correct horse battery staple"},
+        )
+        response = client.get("/sessions?limit=5")
+
+    assert login.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["items"][0]["session_id"] == "web-123"
+    assert captured == {
+        "tenant_id": "tenant-a",
+        "user_id": "alice",
+        "limit": 5,
+    }
+
+
+def test_sessions_endpoint_reports_persistent_store_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.src.slothbearflow_backend import main
+
+    monkeypatch.setattr(
+        main.postgres_persistence,
+        "is_enabled",
+        lambda settings=None: True,
+    )
+    monkeypatch.setattr(
+        main.postgres_persistence,
+        "list_user_sessions",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get("/sessions")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Persistent session history is temporarily unavailable."
+    )
 
 
 def test_structuring_model_cannot_invent_citations_or_tools(

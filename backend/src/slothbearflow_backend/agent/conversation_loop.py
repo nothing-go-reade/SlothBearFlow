@@ -695,6 +695,7 @@ class ChatTurnRunner:
                         if run_result
                         else settings.agent_prompt_version
                     ),
+                    display_session_id=turn.response_session_id,
                     user_id=turn.user_id,
                     tenant_id=turn.tenant_id,
                     settings=settings,

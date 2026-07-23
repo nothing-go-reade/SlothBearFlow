@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Path, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -792,6 +792,23 @@ def trace_detail(
     return trace
 
 
+def _resolve_storage_session_id(
+    display_session_id: str,
+    principal: Principal,
+    settings: Any,
+) -> str:
+    if postgres_persistence.is_enabled(settings):
+        persisted = postgres_persistence.resolve_user_session_id(
+            principal.tenant_id,
+            principal.user_id,
+            display_session_id,
+            settings=settings,
+        )
+        if persisted:
+            return persisted
+    return namespace_session_id(display_session_id, principal, settings)
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
     req: ChatRequest,
@@ -815,7 +832,11 @@ async def chat(
         ) from exc
     turn_input: Optional[TurnInput] = None
     try:
-        storage_session_id = namespace_session_id(req.session_id, principal, settings)
+        storage_session_id = _resolve_storage_session_id(
+            req.session_id,
+            principal,
+            settings,
+        )
         if postgres_persistence.is_enabled(settings):
             persistent_tombstone = postgres_persistence.is_session_tombstoned(
                 storage_session_id, settings=settings
@@ -957,9 +978,38 @@ def export_memory(
     principal: Principal = Depends(require_scopes("memory:read")),
 ) -> Dict[str, Any]:
     settings = get_settings()
-    storage_session_id = namespace_session_id(session_id, principal, settings)
+    storage_session_id = _resolve_storage_session_id(
+        session_id,
+        principal,
+        settings,
+    )
     payload, _ = get_redis_session(storage_session_id, settings=settings)
     return {"session_id": session_id, "memory": payload}
+
+
+@app.get("/sessions")
+def user_sessions(
+    limit: int = Query(default=50, ge=1, le=100),
+    principal: Principal = Depends(require_scopes("memory:read")),
+) -> Dict[str, Any]:
+    settings = get_settings()
+    if not postgres_persistence.is_enabled(settings):
+        raise HTTPException(
+            status_code=503,
+            detail="Persistent session history is not enabled.",
+        )
+    items = postgres_persistence.list_user_sessions(
+        principal.tenant_id,
+        principal.user_id,
+        limit=limit,
+        settings=settings,
+    )
+    if items is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Persistent session history is temporarily unavailable.",
+        )
+    return {"items": items}
 
 
 @app.get("/knowledge/documents")
@@ -990,7 +1040,11 @@ def delete_memory(
     principal: Principal = Depends(require_scopes("memory:delete")),
 ) -> Dict[str, Any]:
     settings = get_settings()
-    storage_session_id = namespace_session_id(session_id, principal, settings)
+    storage_session_id = _resolve_storage_session_id(
+        session_id,
+        principal,
+        settings,
+    )
     try:
         payload, client = get_redis_session(
             storage_session_id,

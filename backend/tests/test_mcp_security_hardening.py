@@ -15,6 +15,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from langchain_core.tools import tool
+from pydantic import ValidationError
 
 
 @pytest.fixture(autouse=True)
@@ -547,7 +548,7 @@ def test_mcp_json_schema_constraints_and_aliases_are_preserved() -> None:
         "count": 2,
         "tags": ["a"],
     }
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         tool.invoke({"file-path": "x", "mode": "write", "count": 0, "extra": True})
 
 

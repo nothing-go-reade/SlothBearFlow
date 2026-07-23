@@ -5,7 +5,6 @@ import {
   AlertCircle,
   ArrowUp,
   BookOpenText,
-  Bot,
   BrainCircuit,
   Check,
   CheckCircle2,
@@ -14,8 +13,6 @@ import {
   FilePlus2,
   Gauge,
   History,
-  KeyRound,
-  Layers3,
   Loader2,
   LogIn,
   LogOut,
@@ -122,6 +119,14 @@ type IngestJob = {
   status: string;
   error_detail?: string;
 };
+type SessionSummary = {
+  session_id: string;
+  created_at: string;
+  updated_at: string;
+  last_user_message: string;
+  last_assistant_message: string;
+  turn_count: number;
+};
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const initialPanelState: Record<Tab, PanelState> = {
@@ -189,6 +194,22 @@ function formatTimestamp(value: unknown): string {
   if (!Number.isFinite(numeric)) return String(value || "");
   const milliseconds = numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
   return new Date(milliseconds).toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatSessionOption(item: SessionSummary): string {
+  const date = new Date(item.updated_at);
+  const updated = Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+  const preview = item.last_user_message.trim() || item.session_id;
+  const compactPreview = preview.length > 22 ? preview.slice(0, 22) + "…" : preview;
+  return [updated, compactPreview].filter(Boolean).join(" · ");
 }
 
 function traceRequestLabel(item: Record<string, unknown>): string {
@@ -263,6 +284,8 @@ export default function HomePage() {
   const [sessionId, setSessionId] = React.useState(() => "web-" + Date.now());
   const [sessionDraft, setSessionDraft] = React.useState(sessionId);
   const [sessionError, setSessionError] = React.useState("");
+  const [sessions, setSessions] = React.useState<SessionSummary[]>([]);
+  const [sessionsLoading, setSessionsLoading] = React.useState(false);
   const [isSending, setIsSending] = React.useState(false);
   const [tab, setTab] = React.useState<Tab>("run");
   const [events, setEvents] = React.useState<Event[]>([]);
@@ -302,6 +325,9 @@ export default function HomePage() {
   const canWriteKnowledge = Boolean(user?.scopes?.includes("knowledge:write"));
   const canApproveTools = Boolean(user?.scopes?.includes("security:approve"));
   const dialogOpen = loginOpen && authRequired;
+  const conversationMessageCount = messages.filter(
+    (message) => message.meta !== "system",
+  ).length;
 
   const push = React.useCallback(
     (tone: Tone, text: string) =>
@@ -323,6 +349,8 @@ export default function HomePage() {
     setSessionId(nextSession);
     setSessionDraft(nextSession);
     setSessionError("");
+    setSessions([]);
+    setSessionsLoading(false);
     setIsSending(false);
     setEvents([]);
     setPanelData({});
@@ -390,6 +418,82 @@ export default function HomePage() {
     [authRequired, signOut],
   );
 
+  const refreshSessions = React.useCallback(async (): Promise<SessionSummary[]> => {
+    setSessionsLoading(true);
+    try {
+      const response = await request("/sessions?limit=100");
+      if (!response.ok) throw new Error(await responseError(response));
+      const data = (await response.json()) as { items?: SessionSummary[] };
+      const next = [...(data.items || [])].sort(
+        (left, right) =>
+          new Date(right.updated_at).getTime() -
+          new Date(left.updated_at).getTime(),
+      );
+      setSessions(next);
+      return next;
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, [request]);
+
+  const loadSessionHistory = React.useCallback(
+    async (
+      nextSessionId: string,
+      options: { announce?: boolean; authEpoch?: number } = {},
+    ): Promise<boolean> => {
+      const expectedEpoch = options.authEpoch ?? authEpochRef.current;
+      const response = await request(
+        "/memory/" + encodeURIComponent(nextSessionId),
+      );
+      if (!response.ok) throw new Error(await responseError(response));
+      const data = (await response.json()) as {
+        memory?: { messages?: Array<Record<string, unknown>> };
+      };
+      if (authEpochRef.current !== expectedEpoch) return false;
+      const rows = (data.memory?.messages || []).filter(
+        (row) => row.role === "user" || row.role === "assistant",
+      );
+      const restored: Message[] = rows.map((row) => ({
+        id: uid(),
+        role: row.role as Message["role"],
+        content: String(row.content || ""),
+        status: "done",
+        meta: row.role === "user" ? nextSessionId : "history",
+      }));
+      abortRef.current?.abort();
+      setSessionId(nextSessionId);
+      setSessionDraft(nextSessionId);
+      setSessionError("");
+      setMessages(restored.length ? restored : [welcome()]);
+      setPanelData((current) => ({ ...current, memory: rows }));
+      setPanels((current) => ({
+        ...current,
+        memory: { phase: "ready" },
+      }));
+      if (options.announce) push("info", `已恢复会话：${nextSessionId}`);
+      return true;
+    },
+    [push, request],
+  );
+
+  const restoreLatestSession = React.useCallback(
+    async (authEpoch: number): Promise<void> => {
+      try {
+        const items = await refreshSessions();
+        if (!items.length || authEpochRef.current !== authEpoch) return;
+        await loadSessionHistory(items[0].session_id, { authEpoch });
+      } catch (error) {
+        if (authEpochRef.current !== authEpoch) return;
+        push(
+          "warn",
+          "历史会话恢复失败：" +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    },
+    [loadSessionHistory, push, refreshSessions],
+  );
+
   const refreshHealth = React.useCallback(async () => {
     const requestId = ++panelRequestRef.current.run;
     setPanels((current) => ({
@@ -431,10 +535,11 @@ export default function HomePage() {
       const nextUser = await response.json();
       if (authEpochRef.current !== authEpoch) return;
       setUser(nextUser);
+      await restoreLatestSession(authEpoch);
     } catch {
       /* request handles expired credentials */
     }
-  }, [request]);
+  }, [request, restoreLatestSession]);
   React.useEffect(() => {
     void refreshHealth();
     const id = window.setInterval(() => void refreshHealth(), 30000);
@@ -487,20 +592,6 @@ export default function HomePage() {
     }));
     push("info", `已切换会话：${normalized}`);
     return normalized;
-  }
-
-  function handleSessionChange(value: string) {
-    setSessionDraft(value);
-    if (sessionError) {
-      setSessionError(validateSessionId(normalizeSessionId(value)));
-    }
-  }
-
-  function handleSessionKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    commitSession(event.currentTarget.value);
-    event.currentTarget.blur();
   }
 
   const updateAssistant = (
@@ -658,6 +749,7 @@ export default function HomePage() {
       else await readStream(response, assistantId);
       if (authEpochRef.current !== authEpoch) return;
       push("ok", "Agent 响应完成");
+      void refreshSessions().catch(() => undefined);
     } catch (error) {
       if (authEpochRef.current !== authEpoch) return;
       const detail =
@@ -833,6 +925,7 @@ export default function HomePage() {
       setCredentials({ username: "", password: "" });
       setLoginOpen(false);
       push("ok", "已登录为 " + data.user.username);
+      await restoreLatestSession(authEpochRef.current);
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -903,6 +996,22 @@ export default function HomePage() {
     commitSession("web-" + Date.now());
   }
 
+  async function selectHistoricalSession(nextSessionId: string) {
+    if (!nextSessionId || nextSessionId === sessionId || sessionsLoading) return;
+    setSessionsLoading(true);
+    try {
+      await loadSessionHistory(nextSessionId, { announce: true });
+    } catch (error) {
+      push(
+        "error",
+        "会话加载失败：" +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    } finally {
+      setSessionsLoading(false);
+    }
+  }
+
   async function deleteMemory() {
     const currentSessionId = commitSession();
     if (!currentSessionId) return;
@@ -920,6 +1029,7 @@ export default function HomePage() {
       if (authEpochRef.current !== authEpoch) return;
       setPanelData((current) => ({ ...current, memory: [] }));
       commitSession("web-" + Date.now());
+      void refreshSessions().catch(() => undefined);
       push(
         result.deleted ? "ok" : "warn",
         result.deleted ? "会话记忆已删除" : "该会话没有可删除的记忆",
@@ -1110,8 +1220,8 @@ export default function HomePage() {
         </div>
         <aside className="side-rail">
           <div className="brand-block">
-            <span className="brand-mark">
-              <Layers3 size={19} />
+            <span className="brand-mark" aria-hidden="true">
+              <img src="/assets/sloth-mascot-128.png" alt="" />
             </span>
             <div className="brand-copy">
               <strong>SlothBearFlow</strong>
@@ -1139,18 +1249,26 @@ export default function HomePage() {
               <History size={14} />
               <span>当前会话</span>
             </div>
-            <label htmlFor="session-id">Session ID</label>
+            <label htmlFor="session-id">历史会话</label>
             <div className="session-field">
-              <input
+              <select
                 id="session-id"
-                value={sessionDraft}
-                maxLength={128}
-                aria-invalid={Boolean(sessionError)}
-                aria-describedby={sessionError ? "session-id-error" : undefined}
-                onChange={(event) => handleSessionChange(event.target.value)}
-                onBlur={(event) => commitSession(event.currentTarget.value)}
-                onKeyDown={handleSessionKeyDown}
-              />
+                value={sessionId}
+                disabled={sessionsLoading || isSending}
+                onFocus={() => void refreshSessions().catch(() => undefined)}
+                onChange={(event) =>
+                  void selectHistoricalSession(event.target.value)
+                }
+              >
+                {!sessions.some((item) => item.session_id === sessionId) ? (
+                  <option value={sessionId}>新会话 · {sessionId}</option>
+                ) : null}
+                {sessions.map((item) => (
+                  <option key={item.session_id} value={item.session_id}>
+                    {formatSessionOption(item)}
+                  </option>
+                ))}
+              </select>
               <button
                 type="button"
                 onClick={() => {
@@ -1169,7 +1287,7 @@ export default function HomePage() {
             ) : null}
             <div className="session-stats">
               <span>
-                <strong>{Math.max(0, messages.length - 1)}</strong>消息
+                <strong>{conversationMessageCount}</strong>消息
               </span>
               <span>
                 <strong>{caps?.memory?.window_pairs ?? "-"}</strong>记忆窗口
@@ -1248,20 +1366,26 @@ export default function HomePage() {
               </button>
             </div>
             <div className="mobile-session">
-              <label htmlFor="mobile-session-id">Session ID</label>
+              <label htmlFor="mobile-session-id">历史会话</label>
               <div className="mobile-session-field">
-                <input
+                <select
                   id="mobile-session-id"
-                  value={sessionDraft}
-                  maxLength={128}
-                  aria-invalid={Boolean(sessionError)}
-                  aria-describedby={
-                    sessionError ? "mobile-session-id-error" : undefined
+                  value={sessionId}
+                  disabled={sessionsLoading || isSending}
+                  onFocus={() => void refreshSessions().catch(() => undefined)}
+                  onChange={(event) =>
+                    void selectHistoricalSession(event.target.value)
                   }
-                  onChange={(event) => handleSessionChange(event.target.value)}
-                  onBlur={(event) => commitSession(event.currentTarget.value)}
-                  onKeyDown={handleSessionKeyDown}
-                />
+                >
+                  {!sessions.some((item) => item.session_id === sessionId) ? (
+                    <option value={sessionId}>新会话 · {sessionId}</option>
+                  ) : null}
+                  {sessions.map((item) => (
+                    <option key={item.session_id} value={item.session_id}>
+                      {formatSessionOption(item)}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={startNewSession}
@@ -1294,7 +1418,7 @@ export default function HomePage() {
                   {message.role === "user" ? (
                     <UserRound size={17} />
                   ) : (
-                    <Bot size={17} />
+                    <img src="/assets/sloth-mascot-128.png" alt="" />
                   )}
                 </div>
                 <div className="message-content">
@@ -1873,8 +1997,8 @@ export default function HomePage() {
             <span className="sr-only" id="login-description">
               使用工作台账户登录
             </span>
-            <span className="brand-mark">
-              <KeyRound size={19} />
+            <span className="brand-mark" aria-hidden="true">
+              <img src="/assets/sloth-mascot-128.png" alt="" />
             </span>
             <h2 id="login-title">登录工作台</h2>
             <label>

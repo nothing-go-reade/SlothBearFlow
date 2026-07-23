@@ -236,15 +236,10 @@ def build_milvus_acl_filters(access: RagAccessContext) -> List[str]:
         filters.extend(f"{scope_filter} and {role_filter}" for role_filter in role_filters)
 
     if access.allow_legacy:
-        for legacy_visibility in (f"not exists {visibility}", f'{visibility} == ""'):
-            filters.append(f"{legacy_visibility} and {tenant_id} == {tenant_value}")
-            if access.tenant_id == "local":
-                filters.extend(
-                    (
-                        f"{legacy_visibility} and not exists {tenant_id}",
-                        f'{legacy_visibility} and {tenant_id} == ""',
-                    )
-                )
+        legacy_visibility = f'{visibility} == ""'
+        filters.append(f"{legacy_visibility} and {tenant_id} == {tenant_value}")
+        if access.tenant_id == "local":
+            filters.append(f'{legacy_visibility} and {tenant_id} == ""')
     return filters
 
 

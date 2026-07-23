@@ -650,6 +650,10 @@ def test_chat_persists_metadata_when_postgres_enabled(monkeypatch: pytest.Monkey
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
+        "backend.src.slothbearflow_backend.main.postgres_persistence.resolve_user_session_id",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         "backend.src.slothbearflow_backend.memory.redis_memory.postgres_persistence.get_session_state",
         lambda *_args, **_kwargs: {
             "generation": 0,
@@ -664,6 +668,7 @@ def test_chat_persists_metadata_when_postgres_enabled(monkeypatch: pytest.Monkey
     assert r.status_code == 200
     assert len(persisted) == 1
     assert persisted[0]["session_id"] == "s-pg"
+    assert persisted[0]["display_session_id"] == "s-pg"
     assert persisted[0]["user_message"] == "你好"
     assert persisted[0]["assistant_message"] == "这是一个测试回答"
     assert persisted[0]["response_mode"] == "invoke"

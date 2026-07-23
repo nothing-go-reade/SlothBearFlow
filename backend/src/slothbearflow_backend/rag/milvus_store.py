@@ -365,11 +365,8 @@ class SimpleMilvusVectorStore:
         if owner_id:
             scope_match += f' and metadata["owner_id"] == {owner_value}'
             source_scope += f' and metadata["owner_id"] == {owner_value}'
-        missing_version = '(not exists metadata["document_version"])'
         delete_filters = [
             f'{scope_match} and metadata["document_version"] != {version_value}',
-            f"{scope_match} and {missing_version}",
-            f"{source_scope} and {missing_version}",
         ]
         if owner_id:
             delete_filters.append(
@@ -377,15 +374,30 @@ class SimpleMilvusVectorStore:
                 f'metadata["owner_id"] == {owner_value} and '
                 f'metadata["document_id"] != {document_value}'
             )
-        if tenant_id == "local":
-            delete_filters.extend(
-                [
-                    f"source == {source_value} and (not exists "
-                    f'metadata["tenant_id"]) and {missing_version}',
-                    f"source == {source_value} and "
-                    f'metadata["tenant_id"] == "" and {missing_version}',
-                ]
-            )
+        legacy_rows = self.client.query(
+            collection_name=self.collection_name,
+            filter=source_scope,
+            output_fields=["id", "source", "metadata"],
+            limit=16384,
+            timeout=self.timeout,
+        )
+        legacy_ids = []
+        for row in legacy_rows:
+            metadata = dict(row.get("metadata") or {})
+            if metadata.get("document_version") not in (None, ""):
+                continue
+            if str(metadata.get("tenant_id") or "") != tenant_id:
+                continue
+            if owner_id and str(metadata.get("owner_id") or "") != owner_id:
+                continue
+            legacy_document_id = str(metadata.get("document_id") or "")
+            if legacy_document_id and legacy_document_id != document_id:
+                continue
+            row_id = str(row.get("id") or "")
+            if row_id:
+                legacy_ids.append(row_id)
+        if legacy_ids:
+            delete_filters.append(f"id in {json.dumps(legacy_ids, ensure_ascii=False)}")
 
         deleted_count = 0
         cleanup_errors = []
